@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/dmc-core",
+    "crates/dmc-security",
+    "crates/dmc-vault",
+    "crates/dmc-journal",
+    "crates/dmc-storage",
+    "crates/dmc-sql",
+    "crates/dmc-pgwire",
+    "crates/dmc-model",
+    "crates/dmc-sql-front",
+    "crates/dmc-sql-bind",
+    "crates/dmc-sql-plan",
+    "crates/dmc-sql-phys",
+    "crates/dmc-materialized",
+    "crates/dmc-sql-exec",
+    "crates/dmc-protocol",
+    "crates/dmc-server",
+    "crates/dmc-ipc",
+    "crates/dmc-remote",
+    "crates/dmc-client",
+    "crates/dmc-tauri",
+    "crates/dmc-backup",
+    "crates/dmc-observability",
+    "crates/dmc-ops",
+    "crates/dmc-bench",
+    "crates/dmc-cli",
+    "test",
+]
+
+[workspace.package]
+name = "avrora-core"
+version = "0.1.0"
+edition = "2024"
+description = "Avrora Core — ядро высокопроизводительной СУБД с поддержкой транзакций, расширяемости и современных SQL-функций."
+license = "MIT"
+authors = ["Igor <igornet0@users.noreply.github.com>"]
+repository = "https://github.com/igornet0/AvroraCore"
+keywords = ["database", "sql", "transaction", "core", "storage", "avrora"]
+categories = ["database-implementations", "data-structures", "storage"]
+

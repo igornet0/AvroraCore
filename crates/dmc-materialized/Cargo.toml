@@ -1,0 +1,16 @@
+[package]
+name = "dmc-materialized"
+version.workspace = true
+edition.workspace = true
+description = "Phase 6.11 — journal-backed materialized catalog + row state"
+
+[dependencies]
+dmc-model = { path = "../dmc-model" }
+dmc-storage = { path = "../dmc-storage" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
+dmc-journal = { path = "../dmc-journal" }

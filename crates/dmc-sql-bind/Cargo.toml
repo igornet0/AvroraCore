@@ -1,0 +1,12 @@
+[package]
+name = "dmc-sql-bind"
+version.workspace = true
+edition.workspace = true
+description = "Phase 6.4 — SQL binder / resolver (AST + Catalog → Bound AST / CatalogEvent)"
+
+[dependencies]
+dmc-model = { path = "../dmc-model" }
+dmc-sql-front = { path = "../dmc-sql-front" }
+thiserror = "2"
+
+[dev-dependencies]

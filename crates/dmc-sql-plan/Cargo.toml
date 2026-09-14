@@ -1,0 +1,13 @@
+[package]
+name = "dmc-sql-plan"
+version.workspace = true
+edition.workspace = true
+description = "Phase 6.5 — SQL logical plan (no optimizer, no execution)"
+
+[dependencies]
+dmc-model = { path = "../dmc-model" }
+dmc-sql-bind = { path = "../dmc-sql-bind" }
+dmc-sql-front = { path = "../dmc-sql-front" }
+thiserror = "2"
+
+[dev-dependencies]

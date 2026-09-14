@@ -1,0 +1,17 @@
+[package]
+name = "dmc-integration-tests"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Integration tests for Avrora DMC SQL Core (vault, auth, persistence)"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dmc-client = { path = "../crates/dmc-client" }
+dmc-ipc = { path = "../crates/dmc-ipc" }
+dmc-protocol = { path = "../crates/dmc-protocol" }
+dmc-server = { path = "../crates/dmc-server" }
+tempfile = "3"
+hex = "0.4"

@@ -1,0 +1,27 @@
+[package]
+name = "dmc-tauri"
+version.workspace = true
+edition.workspace = true
+description = "Phase 7.7.7 — thin Tauri adapter over dmc-client (UI → SDK only)"
+
+[features]
+default = []
+
+[dependencies]
+dmc-client = { path = "../dmc-client" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tokio = { version = "1", features = ["sync"] }
+
+[dev-dependencies]
+dmc-ipc = { path = "../dmc-ipc" }
+dmc-protocol = { path = "../dmc-protocol" }
+dmc-remote = { path = "../dmc-remote" }
+dmc-server = { path = "../dmc-server" }
+tempfile = "3"
+rcgen = { version = "0.14", features = ["x509-parser"] }
+time = { version = "0.3", features = ["macros"] }
+hex = "0.4"
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread"] }
+dmc-vault = { path = "../dmc-vault" }

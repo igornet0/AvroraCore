@@ -1,0 +1,25 @@
+//! Encrypted KV and hierarchical key tree (storage crypto layer).
+//!
+//! Formal model:
+//! - hierarchical path keys derived via HKDF from a master secret
+//! - envelope-wrapped DEKs for rotation / revocation
+//! - capabilities (READ / WRITE / GRANT) separate from encryption material
+//! - master secret lives only in RAM; wrong key → data inaccessible
+
+pub mod access;
+pub mod crypto;
+pub mod error;
+pub mod key;
+pub mod keypass;
+pub mod persist;
+pub mod seed;
+pub mod store;
+
+pub use access::{Capability, Permission, PermissionSet, Role, RoleRegistry, authorize_tree_write};
+pub use error::{Error, Result};
+pub use key::{KeyId, KeyMaterial, KeyNodeMeta, KeyPath, KeyTree, NodeState};
+pub use keypass::{KeyPassBundle, KeyPassMeta};
+pub use persist::{DbSnapshot, OverlayRecord, default_db_path};
+pub use key::{AUDIT_KEK_INFO, JOURNAL_KEK_INFO, METADATA_KEK_INFO, ROOT_KEK_INFO};
+pub use seed::{seed_auth_service, seed_demo};
+pub use store::EncryptedKv;

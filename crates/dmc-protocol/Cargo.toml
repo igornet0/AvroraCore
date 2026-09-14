@@ -1,0 +1,12 @@
+[package]
+name = "dmc-protocol"
+version.workspace = true
+edition.workspace = true
+description = "Phase 7.3 — framed local IPC protocol (Control + Data namespaces)"
+
+[dependencies]
+postcard = { version = "1.0", features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[dev-dependencies]

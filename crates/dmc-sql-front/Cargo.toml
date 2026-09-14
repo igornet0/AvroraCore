@@ -1,0 +1,11 @@
+[package]
+name = "dmc-sql-front"
+version.workspace = true
+edition.workspace = true
+description = "Phase 6.3 — SQL lexer, parser, and syntax-only AST (no catalog / execution)"
+
+[dependencies]
+dmc-model = { path = "../dmc-model" }
+thiserror = "2"
+
+[dev-dependencies]

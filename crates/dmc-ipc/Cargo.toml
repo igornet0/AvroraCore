@@ -1,0 +1,20 @@
+[package]
+name = "dmc-ipc"
+version.workspace = true
+edition.workspace = true
+description = "Phase 7.3 — local IPC transport and Core server"
+
+[dependencies]
+dmc-materialized = { path = "../dmc-materialized" }
+dmc-model = { path = "../dmc-model" }
+dmc-protocol = { path = "../dmc-protocol" }
+dmc-security = { path = "../dmc-security" }
+dmc-server = { path = "../dmc-server" }
+dmc-sql-exec = { path = "../dmc-sql-exec" }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+default = []

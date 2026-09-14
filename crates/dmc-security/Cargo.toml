@@ -1,0 +1,20 @@
+[package]
+name = "dmc-security"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+dmc-vault = { path = "../dmc-vault" }
+hex = "0.4.3"
+rand = "0.10.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11.0"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt", "sync"] }
+totp-rs = { version = "6.0.0", features = ["otpauth", "gen_secret", "qr"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }

@@ -1,0 +1,23 @@
+[package]
+name = "dmc-sql-exec"
+version.workspace = true
+edition.workspace = true
+description = "Phase 6.8–6.12 — SQL execution engine with MVCC and journal-backed DML"
+
+[dependencies]
+dmc-model = { path = "../dmc-model" }
+dmc-materialized = { path = "../dmc-materialized" }
+dmc-storage = { path = "../dmc-storage" }
+dmc-sql-bind = { path = "../dmc-sql-bind" }
+dmc-sql-phys = { path = "../dmc-sql-phys" }
+dmc-sql-plan = { path = "../dmc-sql-plan" }
+dmc-sql-front = { path = "../dmc-sql-front" }
+dmc-security = { path = "../dmc-security" }
+thiserror = "2"
+
+[dev-dependencies]
+dmc-materialized = { path = "../dmc-materialized" }
+dmc-security = { path = "../dmc-security" }
+dmc-sql-front = { path = "../dmc-sql-front" }
+dmc-sql-plan = { path = "../dmc-sql-plan" }
+tempfile = "3"

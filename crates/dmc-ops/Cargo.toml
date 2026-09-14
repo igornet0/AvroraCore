@@ -1,0 +1,26 @@
+[package]
+name = "dmc-ops"
+version.workspace = true
+edition.workspace = true
+description = "Phase 7.10 — Production operations (config / lifecycle / startup)"
+
+[dependencies]
+dmc-backup = { path = "../dmc-backup" }
+dmc-materialized = { path = "../dmc-materialized" }
+dmc-model = { path = "../dmc-model" }
+dmc-protocol = { path = "../dmc-protocol" }
+dmc-security = { path = "../dmc-security" }
+dmc-server = { path = "../dmc-server" }
+dmc-sql-exec = { path = "../dmc-sql-exec" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
+dmc-observability = { path = "../dmc-observability" }
+dmc-sql-bind = { path = "../dmc-sql-bind" }
+dmc-sql-plan = { path = "../dmc-sql-plan" }
+dmc-sql-phys = { path = "../dmc-sql-phys" }
+serde_json = "1"

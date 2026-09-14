@@ -1,0 +1,13 @@
+[package]
+name = "dmc-observability"
+version.workspace = true
+edition.workspace = true
+description = "Phase 7.9 — Observability facade (logs + metrics + audit; observational only)"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+
+[dev-dependencies]
+serde_json = "1"

@@ -1,0 +1,17 @@
+[package]
+name = "dmc-pgwire"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "dmc-pgwire"
+path = "src/bin/dmc-pgwire.rs"
+
+[dependencies]
+dmc-core = { path = "../dmc-core" }
+dmc-sql = { path = "../dmc-sql" }
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["full", "test-util"] }

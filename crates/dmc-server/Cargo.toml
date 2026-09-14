@@ -1,0 +1,26 @@
+[package]
+name = "dmc-server"
+version.workspace = true
+edition.workspace = true
+description = "Phase 7 — transport-independent Core protocol dispatch"
+
+[dependencies]
+dmc-backup = { path = "../dmc-backup" }
+dmc-observability = { path = "../dmc-observability" }
+dmc-materialized = { path = "../dmc-materialized" }
+dmc-model = { path = "../dmc-model" }
+dmc-protocol = { path = "../dmc-protocol" }
+dmc-security = { path = "../dmc-security" }
+dmc-sql-exec = { path = "../dmc-sql-exec" }
+dmc-vault = { path = "../dmc-vault" }
+aes-gcm = "0.10"
+rand = "0.8"
+thiserror = "2"
+zeroize = { version = "1", features = ["derive"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+dmc-ipc = { path = "../dmc-ipc" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

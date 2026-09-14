@@ -1,0 +1,28 @@
+[package]
+name = "dmc-bench"
+version.workspace = true
+edition.workspace = true
+description = "Benchmarks and stress tests for DataModelCore (Avrora)"
+
+[[bin]]
+name = "avrora-stress"
+path = "src/bin/stress.rs"
+
+[[bench]]
+name = "runtime_bench"
+harness = false
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+dmc-core = { path = "../dmc-core" }
+dmc-journal = { path = "../dmc-journal" }
+dmc-sql = { path = "../dmc-sql" }
+dmc-vault = { path = "../dmc-vault" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }

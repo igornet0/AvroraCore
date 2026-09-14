@@ -1,0 +1,19 @@
+[package]
+name = "dmc-remote"
+version.workspace = true
+edition.workspace = true
+description = "Phase 7.4/7.5 — remote TCP + TLS transport"
+
+[dependencies]
+dmc-protocol = { path = "../dmc-protocol" }
+dmc-server = { path = "../dmc-server" }
+dmc-observability = { path = "../dmc-observability" }
+rustls = { version = "0.23", default-features = false, features = ["logging", "ring", "std", "tls12"] }
+rustls-pemfile = "2"
+thiserror = "2"
+
+[dev-dependencies]
+dmc-security = { path = "../dmc-security" }
+rcgen = { version = "0.14", features = ["x509-parser"] }
+tempfile = "3"
+time = { version = "0.3", features = ["macros"] }
