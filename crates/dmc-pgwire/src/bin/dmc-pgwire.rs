@@ -13,6 +13,7 @@ async fn main() {
     let mut listen_addr: SocketAddr = dmc_pgwire::DEFAULT_ADDR.parse().expect("addr");
     let mut create = false;
     let mut unlock: Option<String> = None;
+    let mut master_hex: Option<String> = None;
 
     let args: Vec<String> = env::args().skip(1).collect();
     let mut i = 0;
@@ -31,10 +32,15 @@ async fn main() {
                 i += 1;
                 unlock = Some(args[i].clone());
             }
+            "--master-hex" => {
+                i += 1;
+                master_hex = Some(args[i].clone());
+            }
             other => {
                 eprintln!("unknown arg: {other}");
                 eprintln!(
-                    "usage: dmc-pgwire --data PATH [--listen 127.0.0.1:15432] (--create | --unlock HEX)"
+                    "usage: dmc-pgwire --data PATH [--listen 127.0.0.1:15432] \
+                     (--create [--master-hex HEX] | --unlock HEX)"
                 );
                 std::process::exit(2);
             }
@@ -43,15 +49,18 @@ async fn main() {
     }
 
     let engine = if create {
-        let (engine, master) = SqlEngine::create(&data).expect("create db");
+        let (engine, master) =
+            SqlEngine::create_with_master(&data, master_hex.as_deref()).expect("create db");
         println!("master key (store offline, shown once):\n{master}");
         let _ = std::io::stdout().flush();
         engine
     } else {
-        let Some(key) = unlock else {
-            eprintln!("pass --create or --unlock <master-hex>");
-            std::process::exit(2);
-        };
+        let key = unlock
+            .or(master_hex)
+            .unwrap_or_else(|| {
+                eprintln!("pass --create or --unlock <master-hex>");
+                std::process::exit(2);
+            });
         SqlEngine::open(&data, &key).expect("unlock db")
     };
 

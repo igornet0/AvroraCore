@@ -13,7 +13,14 @@ mod error;
 pub use bridge::DmcBridge;
 pub use dto::{
     BackupCreateUi, BackupInfoUi, BackupRecoverUi, BackupRestoreUi, BackupStatusUi, BackupVerifyUi,
-    ClientUiState, ConnectRequest, ConnectionUi, DiagnosticsUi, QueryResult, SessionInfo,
-    SqlCellDto, SqlRowDto, VaultStatusUi,
+    CatalogPageUi, ClientUiState, ConnectRequest, ConnectionUi, DiagnosticsUi, QueryResult,
+    SessionInfo, SqlCellDto, SqlRowDto, VaultStatusUi,
+};
+pub use dmc_client::{
+    CatalogColumnWire, CatalogConstraintKindWire, CatalogConstraintWire, CatalogDatabaseWire,
+    CatalogIndexWire, CatalogSchemaWire, CatalogSnapshotWire, CatalogTableSummaryWire,
+    ChannelInfoWire, ChannelKindWire, ChannelSpecWire, ColumnDefWire, RuntimeEventWire,
+    SchemaMutationResultWire, SchemaSnapshotWire, ServerCapabilities, StreamDirectionWire,
+    StreamSpecWire, TriggerActionWire, TriggerDefWire,
 };
 pub use error::{FrontendError, FrontendErrorCode, Result};

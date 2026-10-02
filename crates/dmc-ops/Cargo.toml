@@ -9,6 +9,7 @@ dmc-backup = { path = "../dmc-backup" }
 dmc-materialized = { path = "../dmc-materialized" }
 dmc-model = { path = "../dmc-model" }
 dmc-protocol = { path = "../dmc-protocol" }
+dmc-runtime = { path = "../dmc-runtime" }
 dmc-security = { path = "../dmc-security" }
 dmc-server = { path = "../dmc-server" }
 dmc-sql-exec = { path = "../dmc-sql-exec" }

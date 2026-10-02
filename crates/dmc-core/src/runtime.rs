@@ -20,9 +20,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, broadcast};
 
 use crate::audit::{AuditLog, AuditRecord};
-use crate::channel::{ChannelInfo, ChannelRegistry, ChannelSpec};
+use crate::channel::{ChannelInfo, ChannelSpec};
 use crate::error::{Error, Result};
-use crate::event::{CoreEvent, EventKind, EventLog};
+use crate::event::{CoreEvent, EventKind};
 use crate::compaction_meta::{load_compaction_policy, save_compaction_policy};
 use crate::consumer_meta::{load_consumer_meta, save_consumer_meta};
 use crate::group::{ConsumerGroup, GroupDeliveredEvent, GroupDescription, GroupMember, GroupMetadata, LeaseReconcileResult};
@@ -42,7 +42,7 @@ use crate::materializer::{
     RoleConfigBody, RuntimeConfigBody, SealBaseBody,
 };
 use crate::overlay::{OverlayPatch, OverlayStore, ResolvedView};
-use crate::stream::{StreamManager, StreamMessage, StreamSpec};
+use crate::stream::{StreamMessage, StreamSpec};
 use crate::subscription::{
     AckBatchResult, BatchLimits, ConsumerMetadata, ConsumerPolicy, DeliveredEvent, Delivery,
     DeliveryId, JournalPosition, RetryPolicy, Subscription, SubscriptionManager, SubscriptionStatus,
@@ -51,7 +51,8 @@ use dmc_vault::crypto::derive_metadata_kek;
 use crate::subsystem::{
     SubsystemInfo, SubsystemRegistry, SubsystemSpec, interval, render_template,
 };
-use crate::trigger::{TriggerAction, TriggerDef, TriggerEngine};
+use crate::trigger::{TriggerAction, TriggerDef};
+use dmc_runtime::RuntimeHub;
 use dmc_security::AccessControl;
 
 const PRODUCT_NAME: &str = "Avrora";
@@ -107,12 +108,9 @@ struct RuntimeInner {
     snapshot: Option<DbSnapshot>,
     kv: Option<EncryptedKv>,
     access: AccessControl,
-    streams: StreamManager,
-    channels: ChannelRegistry,
-    triggers: TriggerEngine,
+    hub: RuntimeHub,
     audit: AuditLog,
     overlay: OverlayStore,
-    event_log: EventLog,
     subsystems: SubsystemRegistry,
     journal: Option<Journal>,
     offsets: HashMap<String, ConsumerOffset>,
@@ -141,6 +139,8 @@ pub enum DbStatus {
 /// Avrora core runtime: vault lifecycle, streams, channels, roles, triggers, overlay, subsystems.
 #[derive(Clone)]
 pub struct Runtime {
+    /// Shared channel/stream/trigger/event domain (clone = same Arc as DMC adapter).
+    hub: RuntimeHub,
     inner: Arc<Mutex<RuntimeInner>>,
     events: broadcast::Sender<CoreEvent>,
     capability_rotation_dir: Arc<std::sync::Mutex<Option<PathBuf>>>,
@@ -151,13 +151,24 @@ impl Runtime {
         PRODUCT_NAME
     }
 
+    /// Clone of the process-local [`RuntimeHub`] (same Arc as HTTP / DMC adapters).
+    pub fn hub(&self) -> RuntimeHub {
+        self.hub.clone()
+    }
+
     pub fn at_path(path: impl AsRef<Path>) -> Self {
+        Self::at_path_with_hub(path, RuntimeHub::new())
+    }
+
+    /// Build runtime that shares an existing hub (one hub per process for all transports).
+    pub fn at_path_with_hub(path: impl AsRef<Path>, hub: RuntimeHub) -> Self {
         let db_path = path.as_ref().to_path_buf();
         let (status, snapshot) = detect_status(&db_path);
         let (events, _) = broadcast::channel(1024);
         // Empty/Locked: no in-memory root until unlock or devo-init persists identity.
         let access = AccessControl::new_bare(dmc_vault::RoleRegistry::empty());
         Self {
+            hub: hub.clone(),
             capability_rotation_dir: Arc::new(std::sync::Mutex::new(None)),
             inner: Arc::new(Mutex::new(RuntimeInner {
                 db_path,
@@ -165,12 +176,9 @@ impl Runtime {
                 snapshot,
                 kv: None,
                 access,
-                streams: StreamManager::new(),
-                channels: ChannelRegistry::new(),
-                triggers: TriggerEngine::new(),
+                hub,
                 audit: AuditLog::new(),
                 overlay: OverlayStore::new(),
-                event_log: EventLog::new(500),
                 subsystems: SubsystemRegistry::default(),
                 journal: None,
                 offsets: HashMap::new(),
@@ -229,12 +237,23 @@ impl Runtime {
     /// Create an empty vault: crypto key tree + journal only (no roles/users).
     /// Use [`Self::devo_init`] or [`Self::create_dev`] to provision root identity.
     pub async fn create(&self) -> Result<(String, String)> {
+        self.create_with_master(None).await
+    }
+
+    /// Like [`Self::create`], optionally with a fixed master hex (docker / env.dev fixtures).
+    pub async fn create_with_master(&self, master_hex: Option<&str>) -> Result<(String, String)> {
         let mut inner = self.inner.lock().await;
         let layout = StorageLayout::from_db_path(&inner.db_path);
         if inner.status != DbStatus::Empty || layout.vault_exists() {
             return Err(Error::from_vault(dmc_vault::Error::AlreadyExists));
         }
-        let (tree, master) = KeyTree::create_new()?;
+        let (tree, master) = match master_hex.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(hex) => {
+                let master = KeyMaterial::from_hex(hex)?;
+                KeyTree::create_with_master(master)?
+            }
+            None => KeyTree::create_new()?,
+        };
         let db_id = keypass::db_id_from_salt(tree.salt());
         let master_hex = master.to_hex();
         let kv = EncryptedKv::new(tree);
@@ -701,7 +720,7 @@ impl Runtime {
     pub async fn configure_channel(&self, spec: ChannelSpec) -> Result<ChannelId> {
         let mut inner = self.inner.lock().await;
         require_unlocked(&inner)?;
-        if inner.channels.list().iter().any(|c| c.spec.id == spec.id) {
+        if inner.hub.channel(&spec.id).is_ok() {
             return Err(Error::ChannelExists(spec.id.to_string()));
         }
         let session = inner.access.admin_session_id()?;
@@ -727,22 +746,22 @@ impl Runtime {
     }
 
     pub async fn start_channel(&self, id: &ChannelId) -> Result<()> {
-        self.inner.lock().await.channels.start(id)
+        self.inner.lock().await.hub.start_channel(id).map_err(Error::from)
     }
 
     pub async fn stop_channel(&self, id: &ChannelId) -> Result<()> {
-        self.inner.lock().await.channels.stop(id)
+        self.inner.lock().await.hub.stop_channel(id).map_err(Error::from)
     }
 
     pub async fn list_channels(&self) -> Vec<ChannelInfo> {
-        self.inner.lock().await.channels.list()
+        self.inner.lock().await.hub.list_channels()
     }
 
     pub async fn create_stream(&self, spec: StreamSpec) -> Result<StreamId> {
         let mut inner = self.inner.lock().await;
         require_unlocked(&inner)?;
-        inner.channels.get(&spec.channel_id)?;
-        if inner.streams.get(&spec.id).is_ok() {
+        inner.hub.channel(&spec.channel_id)?;
+        if inner.hub.stream(&spec.id).is_ok() {
             return Err(Error::StreamExists(spec.id.to_string()));
         }
         let session = inner.access.admin_session_id()?;
@@ -768,7 +787,7 @@ impl Runtime {
     }
 
     pub async fn list_streams(&self) -> Vec<StreamSpec> {
-        self.inner.lock().await.streams.list()
+        self.inner.lock().await.hub.list_streams()
     }
 
     pub async fn create_subscription(
@@ -779,7 +798,7 @@ impl Runtime {
     ) -> Result<Subscription> {
         let mut inner = self.inner.lock().await;
         require_unlocked(&inner)?;
-        let spec = inner.streams.get(stream_id)?.spec.clone();
+        let spec = inner.hub.stream(stream_id)?;
         let actor = inner.access.session(session)?;
         let subject = actor
             .user_id
@@ -850,7 +869,7 @@ impl Runtime {
     ) -> Result<ConsumerGroup> {
         let mut inner = self.inner.lock().await;
         require_unlocked(&inner)?;
-        let spec = inner.streams.get(stream_id)?.spec.clone();
+        let spec = inner.hub.stream(stream_id)?;
         require_group_stream_access(&inner, session, &spec)?;
         let journal = inner.journal.as_ref().ok_or(Error::Locked)?;
         let partition_count = journal.partition_count();
@@ -881,7 +900,7 @@ impl Runtime {
     ) -> Result<ConsumerGroup> {
         let mut inner = self.inner.lock().await;
         require_unlocked(&inner)?;
-        let spec = inner.streams.get(stream_id)?.spec.clone();
+        let spec = inner.hub.stream(stream_id)?;
         require_group_stream_access(&inner, session, &spec)?;
         let journal = inner.journal.as_ref().ok_or(Error::Locked)?;
         let partition_count = journal.partition_count();
@@ -913,7 +932,7 @@ impl Runtime {
         let mut inner = self.inner.lock().await;
         require_unlocked(&inner)?;
         let stream_id = inner.group_meta.get(group_id)?.stream_id.clone();
-        let spec = inner.streams.get(&stream_id)?.spec.clone();
+        let spec = inner.hub.stream(&stream_id)?;
         require_group_stream_access(&inner, session, &spec)?;
         let now = consumer_now_ms(&inner);
         let member = inner.group_meta.join_group(
@@ -937,7 +956,7 @@ impl Runtime {
         let mut inner = self.inner.lock().await;
         require_unlocked(&inner)?;
         let stream_id = inner.group_meta.get(group_id)?.stream_id.clone();
-        let spec = inner.streams.get(&stream_id)?.spec.clone();
+        let spec = inner.hub.stream(&stream_id)?;
         require_group_stream_access(&inner, session, &spec)?;
         inner.group_meta.leave_group(group_id, member_id)?;
         persist_group_state(&mut inner)?;
@@ -953,7 +972,7 @@ impl Runtime {
         let inner = self.inner.lock().await;
         require_unlocked(&inner)?;
         let group = inner.group_meta.get(group_id)?;
-        let spec = inner.streams.get(&group.stream_id)?.spec.clone();
+        let spec = inner.hub.stream(&group.stream_id)?;
         require_group_stream_access(&inner, session, &spec)?;
         Ok(group.describe())
     }
@@ -963,7 +982,7 @@ impl Runtime {
         let mut inner = self.inner.lock().await;
         require_unlocked(&inner)?;
         let stream_id = inner.group_meta.get(group_id)?.stream_id.clone();
-        let spec = inner.streams.get(&stream_id)?.spec.clone();
+        let spec = inner.hub.stream(&stream_id)?;
         require_group_stream_access(&inner, session, &spec)?;
         inner.group_meta.delete_group(group_id)?;
         persist_group_state(&mut inner)?;
@@ -980,7 +999,7 @@ impl Runtime {
         let mut inner = self.inner.lock().await;
         require_unlocked(&inner)?;
         let stream_id = inner.group_meta.get(group_id)?.stream_id.clone();
-        let spec = inner.streams.get(&stream_id)?.spec.clone();
+        let spec = inner.hub.stream(&stream_id)?;
         require_group_stream_access(&inner, session, &spec)?;
         let member_session = inner
             .group_meta
@@ -1060,7 +1079,7 @@ impl Runtime {
         let inner = self.inner.lock().await;
         require_unlocked(&inner)?;
         let group = inner.group_meta.get(group_id)?;
-        let spec = inner.streams.get(&group.stream_id)?.spec.clone();
+        let spec = inner.hub.stream(&group.stream_id)?;
         require_group_stream_access(&inner, session, &spec)?;
         Ok(group.list_dlq_entries())
     }
@@ -1076,7 +1095,7 @@ impl Runtime {
         let inner = self.inner.lock().await;
         require_unlocked(&inner)?;
         let group = inner.group_meta.get(group_id)?;
-        let spec = inner.streams.get(&group.stream_id)?.spec.clone();
+        let spec = inner.hub.stream(&group.stream_id)?;
         require_group_stream_access(&inner, session, &spec)?;
         group
             .get_dlq_entry(partition_id, sequence)
@@ -1624,13 +1643,13 @@ impl Runtime {
         &self,
         id: &StreamId,
     ) -> Result<broadcast::Receiver<StreamMessage>> {
-        Ok(self.inner.lock().await.streams.subscribe(id)?)
+        Ok(self.inner.lock().await.hub.subscribe_stream(id)?)
     }
 
     pub async fn register_trigger(&self, trigger: TriggerDef) -> Result<TriggerId> {
         let mut inner = self.inner.lock().await;
         require_unlocked(&inner)?;
-        if inner.triggers.list().iter().any(|t| t.id == trigger.id) {
+        if inner.hub.trigger(&trigger.id).is_ok() {
             return Err(Error::Invalid(format!("trigger exists: {}", trigger.id)));
         }
         let session = inner.access.admin_session_id()?;
@@ -1656,11 +1675,11 @@ impl Runtime {
     }
 
     pub async fn list_triggers(&self) -> Vec<TriggerDef> {
-        self.inner.lock().await.triggers.list().to_vec()
+        self.inner.lock().await.hub.list_triggers()
     }
 
     pub async fn recent_events(&self, limit: usize) -> Vec<CoreEvent> {
-        self.inner.lock().await.event_log.list(limit)
+        self.inner.lock().await.hub.recent_events(limit)
     }
 
     /// Seal static base data (immutable reference). Prefer this for catalogs/seeds.
@@ -1680,7 +1699,7 @@ impl Runtime {
     ) -> Result<()> {
         let mut inner = self.inner.lock().await;
         require_unlocked(&inner)?;
-        let entry = inner.streams.get(&stream)?.clone();
+        let entry = inner.hub.stream_entry(&stream)?;
         if entry.spec.direction != crate::stream::StreamDirection::Inbound {
             return Err(Error::NotInbound(stream.to_string()));
         }
@@ -1880,9 +1899,9 @@ impl Runtime {
             product: PRODUCT_NAME.into(),
             nodes,
             overlays,
-            channels: inner.channels.list(),
-            streams: inner.streams.list(),
-            triggers: inner.triggers.list().to_vec(),
+            channels: inner.hub.list_channels(),
+            streams: inner.hub.list_streams(),
+            triggers: inner.hub.list_triggers(),
             subsystems: inner.subsystems.list(),
         })
     }
@@ -2127,7 +2146,7 @@ impl Runtime {
     pub async fn register_subsystem(&self, spec: SubsystemSpec) -> Result<SubsystemId> {
         let mut inner = self.inner.lock().await;
         require_unlocked(&inner)?;
-        inner.streams.get(&spec.stream_id)?;
+        inner.hub.stream(&spec.stream_id)?;
         inner.subsystems.register(spec).map_err(Error::Invalid)
     }
 
@@ -2173,7 +2192,7 @@ impl Runtime {
                         role,
                         Some(&spec.stream_id),
                     );
-                    inner.event_log.push(ev.clone());
+                    inner.hub.push_event(ev.clone());
                     let _ = rt.events.send(ev);
                 }
                 tokio::time::sleep(interval(&spec)).await;
@@ -2311,7 +2330,7 @@ fn apply_unlock(
     inner.seen_event_ids.clear();
     for entry in &entries {
         apply_live(inner, entry, ApplyMode::Replay)?;
-        inner.event_log.push(core_event_from_journal(entry));
+        inner.hub.push_event(core_event_from_journal(entry));
         let role = entry.actor_role.clone();
         let session = SessionId::from(hex::encode(entry.actor_session));
         inner.audit.record_full(
@@ -2598,7 +2617,7 @@ fn group_consume_inner(
     let _ = reconcile_group_leases_inner(inner)?;
 
     let stream_id = inner.group_meta.get(group_id)?.stream_id.clone();
-    let spec = inner.streams.get(&stream_id)?.spec.clone();
+    let spec = inner.hub.stream(&stream_id)?;
     // AuthZ before history / pending recovery.
     require_group_stream_access(inner, session, &spec)?;
 
@@ -2727,7 +2746,7 @@ fn group_ack_inner(
     let _ = reconcile_group_leases_inner(inner)?;
 
     let stream_id = inner.group_meta.get(group_id)?.stream_id.clone();
-    let spec = inner.streams.get(&stream_id)?.spec.clone();
+    let spec = inner.hub.stream(&stream_id)?;
     require_group_stream_access(inner, session, &spec)?;
 
     let group = inner.group_meta.get(group_id)?;
@@ -2759,7 +2778,7 @@ fn group_retry_inner(
     let _ = reconcile_group_leases_inner(inner)?;
 
     let stream_id = inner.group_meta.get(group_id)?.stream_id.clone();
-    let spec = inner.streams.get(&stream_id)?.spec.clone();
+    let spec = inner.hub.stream(&stream_id)?;
     require_group_stream_access(inner, session, &spec)?;
 
     let group = inner.group_meta.get(group_id)?;
@@ -3185,9 +3204,7 @@ fn apply_live(inner: &mut RuntimeInner, entry: &JournalEntry, mode: ApplyMode) -
             kv,
             access: &mut inner.access,
             overlay: &mut inner.overlay,
-            channels: &mut inner.channels,
-            streams: &mut inner.streams,
-            triggers: &mut inner.triggers,
+            hub: &inner.hub,
             subscriptions: &mut inner.subscriptions,
             offsets: &mut inner.offsets,
             seen: &mut inner.seen_event_ids,
@@ -3210,7 +3227,7 @@ fn matching_entries(
     from_exclusive: u64,
     limit: Option<usize>,
 ) -> Result<Vec<JournalEntry>> {
-    let spec = inner.streams.get(&sub.stream_id)?.spec.clone();
+    let spec = inner.hub.stream(&sub.stream_id)?;
     let journal = inner.journal.as_ref().ok_or(Error::Locked)?;
     let mut reader = journal
         .merge_reader(from_exclusive)
@@ -3328,7 +3345,7 @@ fn validate_subscription_capability(
     sub: &Subscription,
     path: Option<&KeyPath>,
 ) -> Result<()> {
-    let spec = inner.streams.get(&sub.stream_id)?.spec.clone();
+    let spec = inner.hub.stream(&sub.stream_id)?;
     let issued = inner
         .access
         .covering_for_subject(
@@ -3510,7 +3527,7 @@ fn finish_event(
         .audit
         .attach_identity(user_id, device_id, capability_id);
     let event = CoreEvent::new(kind, path, payload, session, role, source_stream.as_ref());
-    inner.event_log.push(event.clone());
+    inner.hub.push_event(event.clone());
     dispatch_triggers(inner, &inner_events_unused(), &event)
 }
 
@@ -3524,11 +3541,11 @@ fn dispatch_triggers(
     events: &broadcast::Sender<CoreEvent>,
     event: &CoreEvent,
 ) -> Result<()> {
-    let matched = inner.triggers.matching(event);
+    let matched = inner.hub.matching_triggers(event);
     for def in matched {
         match def.action {
             TriggerAction::ForwardToStream { stream_id: dest } => {
-                let entry = inner.streams.get(&dest)?.clone();
+                let entry = inner.hub.stream_entry(&dest)?;
                 if entry.spec.direction != crate::stream::StreamDirection::Outbound {
                     return Err(Error::NotOutbound(dest.to_string()));
                 }
@@ -3540,7 +3557,7 @@ fn dispatch_triggers(
                 inner
                     .access
                     .authorize(&session, &key_path, Permission::Write)?;
-                inner.streams.publish(
+                inner.hub.publish_stream(
                     &dest,
                     StreamMessage {
                         stream_id: dest.clone(),
@@ -3557,7 +3574,7 @@ fn dispatch_triggers(
                     &event.role_id,
                     Some(&dest),
                 );
-                inner.event_log.push(fwd.clone());
+                inner.hub.push_event(fwd.clone());
                 let _ = events.send(fwd);
             }
         }

@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::ProtocolErrorCode;
+use crate::runtime::{
+    CatalogColumnWire, CatalogConstraintWire, CatalogDatabaseWire, CatalogIndexWire,
+    CatalogSchemaWire, CatalogSnapshotWire, CatalogTableSummaryWire, ChannelInfoWire,
+    ChannelSpecWire, RuntimeEventWire, SchemaSnapshotWire, ServerCapabilities, StreamSpecWire,
+    TriggerDefWire,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestEnvelope<T> {
@@ -122,6 +128,214 @@ pub enum ControlRequest {
         session_id: String,
         target_id: String,
     },
+    /// Feature discovery — does not require a session.
+    GetCapabilities,
+    ChannelList {
+        session_id: String,
+    },
+    ChannelGet {
+        session_id: String,
+        id: String,
+    },
+    ChannelConfigure {
+        session_id: String,
+        spec: ChannelSpecWire,
+    },
+    ChannelStart {
+        session_id: String,
+        id: String,
+    },
+    ChannelStop {
+        session_id: String,
+        id: String,
+    },
+    StreamList {
+        session_id: String,
+    },
+    StreamGet {
+        session_id: String,
+        id: String,
+    },
+    StreamCreate {
+        session_id: String,
+        spec: StreamSpecWire,
+    },
+    StreamIngest {
+        session_id: String,
+        stream_id: String,
+        path: String,
+        payload: String,
+    },
+    TriggerList {
+        session_id: String,
+    },
+    TriggerGet {
+        session_id: String,
+        id: String,
+    },
+    TriggerCreate {
+        session_id: String,
+        def: TriggerDefWire,
+    },
+    EventList {
+        session_id: String,
+        #[serde(default = "default_event_limit")]
+        limit: u32,
+    },
+    RuntimeSchema {
+        session_id: String,
+    },
+    CatalogList {
+        session_id: String,
+    },
+    /// Lazy catalog: databases only.
+    DatabaseList {
+        session_id: String,
+    },
+    SchemaList {
+        session_id: String,
+        #[serde(default)]
+        database: Option<String>,
+        #[serde(default)]
+        cursor: Option<String>,
+        #[serde(default = "default_catalog_limit")]
+        limit: u32,
+        #[serde(default)]
+        name_filter: Option<String>,
+    },
+    TableList {
+        session_id: String,
+        database: String,
+        schema: String,
+        #[serde(default)]
+        cursor: Option<String>,
+        #[serde(default = "default_catalog_limit")]
+        limit: u32,
+        #[serde(default)]
+        name_filter: Option<String>,
+    },
+    TableGet {
+        session_id: String,
+        database: String,
+        schema: String,
+        table: String,
+    },
+    ColumnList {
+        session_id: String,
+        database: String,
+        schema: String,
+        table: String,
+        #[serde(default)]
+        cursor: Option<String>,
+        #[serde(default = "default_catalog_limit")]
+        limit: u32,
+        #[serde(default)]
+        name_filter: Option<String>,
+    },
+    IndexList {
+        session_id: String,
+        database: String,
+        schema: String,
+        table: String,
+        #[serde(default)]
+        cursor: Option<String>,
+        #[serde(default = "default_catalog_limit")]
+        limit: u32,
+        #[serde(default)]
+        name_filter: Option<String>,
+    },
+    ConstraintList {
+        session_id: String,
+        database: String,
+        schema: String,
+        table: String,
+        #[serde(default)]
+        cursor: Option<String>,
+        #[serde(default = "default_catalog_limit")]
+        limit: u32,
+        #[serde(default)]
+        name_filter: Option<String>,
+    },
+    CreateTable {
+        session_id: String,
+        database: String,
+        schema: String,
+        name: String,
+        columns: Vec<crate::runtime::ColumnDefWire>,
+    },
+    DropTable {
+        session_id: String,
+        database: String,
+        schema: String,
+        table: String,
+    },
+    RenameTable {
+        session_id: String,
+        database: String,
+        schema: String,
+        table: String,
+        new_name: String,
+    },
+    AddColumn {
+        session_id: String,
+        database: String,
+        schema: String,
+        table: String,
+        column: crate::runtime::ColumnDefWire,
+    },
+    AlterColumn {
+        session_id: String,
+        database: String,
+        schema: String,
+        table: String,
+        column: String,
+        #[serde(default)]
+        nullable: Option<bool>,
+        #[serde(default)]
+        data_type: Option<String>,
+        #[serde(default)]
+        default: Option<Option<String>>,
+    },
+    DropColumn {
+        session_id: String,
+        database: String,
+        schema: String,
+        table: String,
+        column: String,
+    },
+    RenameColumn {
+        session_id: String,
+        database: String,
+        schema: String,
+        table: String,
+        column: String,
+        new_name: String,
+    },
+    CreateIndex {
+        session_id: String,
+        database: String,
+        schema: String,
+        table: String,
+        name: String,
+        columns: Vec<String>,
+        #[serde(default)]
+        unique: bool,
+    },
+    DropIndex {
+        session_id: String,
+        database: String,
+        schema: String,
+        table: String,
+        name: String,
+    },
+}
+
+fn default_event_limit() -> u32 {
+    100
+}
+
+fn default_catalog_limit() -> u32 {
+    500
 }
 
 /// Wire DTO for ControlResponse::Diagnostics (7.9.7). Sanitized; no paths/secrets.
@@ -231,6 +445,74 @@ pub enum ControlResponse {
         vault_locked: bool,
         sessions_invalid: bool,
     },
+    Capabilities(ServerCapabilities),
+    ChannelList {
+        items: Vec<ChannelInfoWire>,
+    },
+    ChannelInfo(ChannelInfoWire),
+    ChannelConfigured {
+        id: String,
+    },
+    StreamList {
+        items: Vec<StreamSpecWire>,
+    },
+    StreamInfo(StreamSpecWire),
+    StreamCreated {
+        id: String,
+    },
+    TriggerList {
+        items: Vec<TriggerDefWire>,
+    },
+    TriggerInfo(TriggerDefWire),
+    TriggerCreated {
+        id: String,
+    },
+    EventList {
+        items: Vec<RuntimeEventWire>,
+    },
+    RuntimeSchema(SchemaSnapshotWire),
+    CatalogList(CatalogSnapshotWire),
+    DatabaseList {
+        items: Vec<CatalogDatabaseWire>,
+    },
+    SchemaList {
+        items: Vec<CatalogSchemaWire>,
+        #[serde(default)]
+        next_cursor: Option<String>,
+        #[serde(default)]
+        truncated: bool,
+    },
+    TableList {
+        items: Vec<CatalogTableSummaryWire>,
+        #[serde(default)]
+        next_cursor: Option<String>,
+        #[serde(default)]
+        truncated: bool,
+    },
+    TableGet(CatalogTableSummaryWire),
+    ColumnList {
+        items: Vec<CatalogColumnWire>,
+        #[serde(default)]
+        next_cursor: Option<String>,
+        #[serde(default)]
+        truncated: bool,
+    },
+    IndexList {
+        items: Vec<CatalogIndexWire>,
+        #[serde(default)]
+        next_cursor: Option<String>,
+        #[serde(default)]
+        truncated: bool,
+    },
+    ConstraintList {
+        items: Vec<CatalogConstraintWire>,
+        #[serde(default)]
+        next_cursor: Option<String>,
+        #[serde(default)]
+        truncated: bool,
+    },
+    SchemaMutation(crate::runtime::SchemaMutationResultWire),
+    RuntimeOk,
 }
 
 /// Opaque backup listing DTO for Control Plane / Tauri (no filesystem paths).

@@ -2,15 +2,19 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 
 use dmc_client::{
-    Client, ClientError, ConnectionPhase, ConnectionTarget, DiagnosticsWire, ExecuteOutcome,
-    KeyPassHandle, RemoteTlsConfig, SqlResult, TlsClientConfig, VaultState,
+    CatalogColumnWire, CatalogConstraintWire, CatalogDatabaseWire, CatalogIndexWire,
+    CatalogListOptions, CatalogSchemaWire, CatalogSnapshotWire, CatalogTableSummaryWire,
+    ChannelInfoWire, ChannelSpecWire, Client, ClientError, ColumnDefWire, ConnectionPhase,
+    ConnectionTarget, DiagnosticsWire, ExecuteOutcome, KeyPassHandle, RemoteTlsConfig,
+    RuntimeEventWire, SchemaMutationResultWire, SchemaSnapshotWire, ServerCapabilities, SqlResult,
+    StreamSpecWire, TlsClientConfig, TriggerDefWire, VaultState,
 };
 use tokio::sync::Mutex;
 
 use crate::dto::{
     BackupCreateUi, BackupInfoUi, BackupRecoverUi, BackupRestoreUi, BackupStatusUi, BackupVerifyUi,
-    ClientUiState, ConnectRequest, ConnectionUi, DiagnosticsUi, QueryResult, SessionInfo,
-    SqlCellDto, SqlRowDto, VaultStatusUi,
+    CatalogPageUi, ClientUiState, ConnectRequest, ConnectionUi, DiagnosticsUi, QueryResult,
+    SessionInfo, SqlCellDto, SqlRowDto, VaultStatusUi,
 };
 use crate::error::{FrontendError, FrontendErrorCode, Result};
 
@@ -339,6 +343,416 @@ impl DmcBridge {
             vault_locked: r.vault_locked,
             sessions_invalid: r.sessions_invalid,
         })
+    }
+
+    pub async fn capabilities(&self) -> Result<ServerCapabilities> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client
+            .capabilities()
+            .map_err(FrontendError::from_client)
+    }
+
+    pub async fn channel_list(&self) -> Result<Vec<ChannelInfoWire>> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client.channels().list().map_err(FrontendError::from_client)
+    }
+
+    pub async fn channel_get(&self, id: String) -> Result<ChannelInfoWire> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client.channels().get(&id).map_err(FrontendError::from_client)
+    }
+
+    pub async fn channel_configure(&self, spec: ChannelSpecWire) -> Result<String> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client
+            .channels()
+            .configure(spec)
+            .map_err(FrontendError::from_client)
+    }
+
+    pub async fn channel_start(&self, id: String) -> Result<()> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client.channels().start(&id).map_err(FrontendError::from_client)
+    }
+
+    pub async fn channel_stop(&self, id: String) -> Result<()> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client.channels().stop(&id).map_err(FrontendError::from_client)
+    }
+
+    pub async fn stream_list(&self) -> Result<Vec<StreamSpecWire>> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client.streams().list().map_err(FrontendError::from_client)
+    }
+
+    pub async fn stream_get(&self, id: String) -> Result<StreamSpecWire> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client.streams().get(&id).map_err(FrontendError::from_client)
+    }
+
+    pub async fn stream_create(&self, spec: StreamSpecWire) -> Result<String> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client.streams().create(spec).map_err(FrontendError::from_client)
+    }
+
+    pub async fn stream_ingest(&self, stream_id: String, path: String, payload: String) -> Result<()> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client
+            .streams()
+            .ingest(&stream_id, &path, &payload)
+            .map_err(FrontendError::from_client)
+    }
+
+    pub async fn trigger_list(&self) -> Result<Vec<TriggerDefWire>> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client.triggers().list().map_err(FrontendError::from_client)
+    }
+
+    pub async fn trigger_get(&self, id: String) -> Result<TriggerDefWire> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client.triggers().get(&id).map_err(FrontendError::from_client)
+    }
+
+    pub async fn trigger_create(&self, def: TriggerDefWire) -> Result<String> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client.triggers().create(def).map_err(FrontendError::from_client)
+    }
+
+    pub async fn event_list(&self, limit: u32) -> Result<Vec<RuntimeEventWire>> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client.events().list(limit).map_err(FrontendError::from_client)
+    }
+
+    pub async fn runtime_schema(&self) -> Result<SchemaSnapshotWire> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client
+            .events()
+            .runtime_schema()
+            .map_err(FrontendError::from_client)
+    }
+
+    pub async fn catalog_list(&self) -> Result<CatalogSnapshotWire> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client
+            .catalog()
+            .snapshot()
+            .map_err(FrontendError::from_client)
+    }
+
+    pub async fn catalog_databases(&self) -> Result<Vec<CatalogDatabaseWire>> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client
+            .catalog()
+            .list_databases()
+            .map_err(FrontendError::from_client)
+    }
+
+    pub async fn catalog_schemas(
+        &self,
+        database: Option<String>,
+        cursor: Option<String>,
+        limit: Option<u32>,
+        name_filter: Option<String>,
+    ) -> Result<CatalogPageUi<CatalogSchemaWire>> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        let page = client
+            .catalog()
+            .list_schemas(
+                database.as_deref(),
+                CatalogListOptions {
+                    cursor,
+                    limit,
+                    name_filter,
+                },
+            )
+            .map_err(FrontendError::from_client)?;
+        Ok(page.into())
+    }
+
+    pub async fn catalog_tables(
+        &self,
+        database: String,
+        schema: String,
+        cursor: Option<String>,
+        limit: Option<u32>,
+        name_filter: Option<String>,
+    ) -> Result<CatalogPageUi<CatalogTableSummaryWire>> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        let page = client
+            .catalog()
+            .list_tables(
+                &database,
+                &schema,
+                CatalogListOptions {
+                    cursor,
+                    limit,
+                    name_filter,
+                },
+            )
+            .map_err(FrontendError::from_client)?;
+        Ok(page.into())
+    }
+
+    pub async fn catalog_table_get(
+        &self,
+        database: String,
+        schema: String,
+        table: String,
+    ) -> Result<CatalogTableSummaryWire> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client
+            .catalog()
+            .get_table(&database, &schema, &table)
+            .map_err(FrontendError::from_client)
+    }
+
+    pub async fn catalog_columns(
+        &self,
+        database: String,
+        schema: String,
+        table: String,
+        cursor: Option<String>,
+        limit: Option<u32>,
+        name_filter: Option<String>,
+    ) -> Result<CatalogPageUi<CatalogColumnWire>> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        let page = client
+            .catalog()
+            .list_columns(
+                &database,
+                &schema,
+                &table,
+                CatalogListOptions {
+                    cursor,
+                    limit,
+                    name_filter,
+                },
+            )
+            .map_err(FrontendError::from_client)?;
+        Ok(page.into())
+    }
+
+    pub async fn catalog_indexes(
+        &self,
+        database: String,
+        schema: String,
+        table: String,
+        cursor: Option<String>,
+        limit: Option<u32>,
+        name_filter: Option<String>,
+    ) -> Result<CatalogPageUi<CatalogIndexWire>> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        let page = client
+            .catalog()
+            .list_indexes(
+                &database,
+                &schema,
+                &table,
+                CatalogListOptions {
+                    cursor,
+                    limit,
+                    name_filter,
+                },
+            )
+            .map_err(FrontendError::from_client)?;
+        Ok(page.into())
+    }
+
+    pub async fn catalog_constraints(
+        &self,
+        database: String,
+        schema: String,
+        table: String,
+        cursor: Option<String>,
+        limit: Option<u32>,
+        name_filter: Option<String>,
+    ) -> Result<CatalogPageUi<CatalogConstraintWire>> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        let page = client
+            .catalog()
+            .list_constraints(
+                &database,
+                &schema,
+                &table,
+                CatalogListOptions {
+                    cursor,
+                    limit,
+                    name_filter,
+                },
+            )
+            .map_err(FrontendError::from_client)?;
+        Ok(page.into())
+    }
+
+    pub async fn ddl_create_table(
+        &self,
+        database: String,
+        schema: String,
+        name: String,
+        columns: Vec<ColumnDefWire>,
+    ) -> Result<SchemaMutationResultWire> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client
+            .ddl()
+            .create_table(&database, &schema, &name, columns)
+            .map_err(FrontendError::from_client)
+    }
+
+    pub async fn ddl_drop_table(
+        &self,
+        database: String,
+        schema: String,
+        table: String,
+    ) -> Result<SchemaMutationResultWire> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client
+            .ddl()
+            .drop_table(&database, &schema, &table)
+            .map_err(FrontendError::from_client)
+    }
+
+    pub async fn ddl_rename_table(
+        &self,
+        database: String,
+        schema: String,
+        table: String,
+        new_name: String,
+    ) -> Result<SchemaMutationResultWire> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client
+            .ddl()
+            .rename_table(&database, &schema, &table, &new_name)
+            .map_err(FrontendError::from_client)
+    }
+
+    pub async fn ddl_add_column(
+        &self,
+        database: String,
+        schema: String,
+        table: String,
+        column: ColumnDefWire,
+    ) -> Result<SchemaMutationResultWire> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client
+            .ddl()
+            .add_column(&database, &schema, &table, column)
+            .map_err(FrontendError::from_client)
+    }
+
+    pub async fn ddl_alter_column(
+        &self,
+        database: String,
+        schema: String,
+        table: String,
+        column: String,
+        nullable: Option<bool>,
+        data_type: Option<String>,
+        default: Option<Option<String>>,
+    ) -> Result<SchemaMutationResultWire> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client
+            .ddl()
+            .alter_column(
+                &database,
+                &schema,
+                &table,
+                &column,
+                nullable,
+                data_type,
+                default,
+            )
+            .map_err(FrontendError::from_client)
+    }
+
+    pub async fn ddl_drop_column(
+        &self,
+        database: String,
+        schema: String,
+        table: String,
+        column: String,
+    ) -> Result<SchemaMutationResultWire> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client
+            .ddl()
+            .drop_column(&database, &schema, &table, &column)
+            .map_err(FrontendError::from_client)
+    }
+
+    pub async fn ddl_rename_column(
+        &self,
+        database: String,
+        schema: String,
+        table: String,
+        column: String,
+        new_name: String,
+    ) -> Result<SchemaMutationResultWire> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client
+            .ddl()
+            .rename_column(&database, &schema, &table, &column, &new_name)
+            .map_err(FrontendError::from_client)
+    }
+
+    pub async fn ddl_create_index(
+        &self,
+        database: String,
+        schema: String,
+        table: String,
+        name: String,
+        columns: Vec<String>,
+        unique: bool,
+    ) -> Result<SchemaMutationResultWire> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client
+            .ddl()
+            .create_index(&database, &schema, &table, &name, columns, unique)
+            .map_err(FrontendError::from_client)
+    }
+
+    pub async fn ddl_drop_index(
+        &self,
+        database: String,
+        schema: String,
+        table: String,
+        name: String,
+    ) -> Result<SchemaMutationResultWire> {
+        let mut g = self.inner.lock().await;
+        let client = require_client(&mut g)?;
+        client
+            .ddl()
+            .drop_index(&database, &schema, &table, &name)
+            .map_err(FrontendError::from_client)
     }
 
     pub async fn backup_status(&self, target_id: String) -> Result<BackupStatusUi> {

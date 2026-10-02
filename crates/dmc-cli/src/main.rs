@@ -45,6 +45,9 @@ enum Cmd {
         /// Dev bootstrap: analyst/pw + users table + .dmc-dev-master.hex
         #[arg(long)]
         dev: bool,
+        /// Co-host HTTP admin on this address (shared RuntimeHub with DMC IPC)
+        #[arg(long)]
+        http: Option<String>,
     },
     /// Интерактивный SQL shell
     Shell {
@@ -210,12 +213,27 @@ fn run() -> Result<(), String> {
     let data_dir = cli.data_dir.clone();
 
     match cli.cmd {
-        Cmd::Serve { data_dir, socket, dev } => {
+        Cmd::Serve {
+            data_dir,
+            socket,
+            dev,
+            http,
+        } => {
             std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
             let socket = socket.unwrap_or_else(default_socket_path);
-            let (_handle, outcome) = spawn_server(data_dir, socket, dev, &view)?;
+            let http_addr = match http {
+                Some(s) => Some(
+                    s.parse::<std::net::SocketAddr>()
+                        .map_err(|e| format!("invalid --http address: {e}"))?,
+                ),
+                None => None,
+            };
+            let (_handle, outcome) = spawn_server(data_dir, socket, dev, http_addr, &view)?;
             println!("DMC Core listening on {}", outcome.socket.display());
             println!("data_root={}", outcome.data_root.display());
+            if let Some(addr) = http_addr {
+                println!("HTTP adapter on http://{addr} (shared RuntimeHub)");
+            }
             if outcome.dev_users {
                 println!("dev user: analyst / pw");
             }

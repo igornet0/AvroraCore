@@ -57,11 +57,17 @@ pub struct DevUiCredentials {
     pub otpauth_url: String,
 }
 
-/// Default UI access key when devo-init does not specify one.
-pub const DEV_DEFAULT_UI_ACCESS_KEY: &str = "avrora-dev-ui-key";
-
-/// Dev-only: enroll access key + random TOTP secret without browser setup.
+/// Dev-only: enroll access key + TOTP without browser setup (random TOTP).
 pub fn dev_enroll_ui_auth(path: &Path, access_key: &str) -> Result<DevUiCredentials, AuthError> {
+    dev_enroll_ui_auth_with_totp(path, access_key, None)
+}
+
+/// Dev-only: enroll with an optional fixed TOTP base32 secret (docker / env.dev).
+pub fn dev_enroll_ui_auth_with_totp(
+    path: &Path,
+    access_key: &str,
+    totp_secret_b32: Option<&str>,
+) -> Result<DevUiCredentials, AuthError> {
     use crate::credentials::{load_file, save_file, AuthFile};
     use crate::crypto::hash_access_key;
     use crate::identity::{ISSUER, UI_OPERATOR};
@@ -83,8 +89,14 @@ pub fn dev_enroll_ui_auth(path: &Path, access_key: &str) -> Result<DevUiCredenti
     let mut salt = [0u8; 16];
     rand::fill(&mut salt);
     let access_key_hash = hash_access_key(&salt, access_key);
-    let secret = Secret::generate();
-    let totp_secret_b32 = secret.to_base32();
+    let totp_secret_b32 = match totp_secret_b32.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(fixed) => {
+            let _ = Secret::try_from_base32(fixed)
+                .map_err(|e| AuthError::BadRequest(format!("totp secret: {e}")))?;
+            fixed.to_string()
+        }
+        None => Secret::generate().to_base32(),
+    };
     let totp = Builder::new()
         .with_secret(Secret::try_from_base32(&totp_secret_b32).map_err(|e| {
             AuthError::BadRequest(format!("totp secret: {e}"))
@@ -304,6 +316,7 @@ fn verify_totp(secret_b32: &str, code: &str) -> Result<bool, AuthError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dev::{DEV_DEFAULT_UI_ACCESS_KEY, UI_TOTP_SECRET};
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -315,6 +328,25 @@ mod tests {
         assert_eq!(creds.access_key, DEV_DEFAULT_UI_ACCESS_KEY);
         let auth = AuthManager::open(&path);
         assert!(auth.status().await.enrolled);
+    }
+
+    #[tokio::test]
+    async fn dev_enroll_fixed_totp_secret() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("avrora.ui-auth.json");
+        let fixed = UI_TOTP_SECRET;
+        let creds =
+            dev_enroll_ui_auth_with_totp(&path, DEV_DEFAULT_UI_ACCESS_KEY, Some(fixed)).unwrap();
+        assert_eq!(creds.totp_secret, fixed);
+        let auth = AuthManager::open(&path);
+        let totp = Builder::new()
+            .with_secret(Secret::try_from_base32(fixed).unwrap())
+            .with_account_name(UI_OPERATOR)
+            .with_issuer(Some(ISSUER))
+            .build()
+            .unwrap();
+        let code = totp.generate_current().to_string();
+        assert!(auth.login(DEV_DEFAULT_UI_ACCESS_KEY, &code).await.is_ok());
     }
 
     #[tokio::test]

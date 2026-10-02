@@ -60,7 +60,10 @@ fn handle_control_inner(
 fn control_allowed_while_stopping(body: &ControlRequest) -> bool {
     matches!(
         body,
-        ControlRequest::Health | ControlRequest::Readiness | ControlRequest::Diagnostics
+        ControlRequest::Health
+        | ControlRequest::Readiness
+        | ControlRequest::Diagnostics
+        | ControlRequest::GetCapabilities
     )
 }
 
@@ -384,6 +387,85 @@ fn handle_control_body(
             &session_id,
             &target_id,
         )),
+        ControlRequest::GetCapabilities => Ok(crate::runtime_ops::handle_runtime(
+            state,
+            request_id,
+            ControlRequest::GetCapabilities,
+        )),
+        req @ (ControlRequest::ChannelList { .. }
+        | ControlRequest::ChannelGet { .. }
+        | ControlRequest::ChannelConfigure { .. }
+        | ControlRequest::ChannelStart { .. }
+        | ControlRequest::ChannelStop { .. }
+        | ControlRequest::StreamList { .. }
+        | ControlRequest::StreamGet { .. }
+        | ControlRequest::StreamCreate { .. }
+        | ControlRequest::StreamIngest { .. }
+        | ControlRequest::TriggerList { .. }
+        | ControlRequest::TriggerGet { .. }
+        | ControlRequest::TriggerCreate { .. }
+        | ControlRequest::EventList { .. }
+        | ControlRequest::RuntimeSchema { .. }
+        | ControlRequest::CatalogList { .. }
+        | ControlRequest::DatabaseList { .. }
+        | ControlRequest::SchemaList { .. }
+        | ControlRequest::TableList { .. }
+        | ControlRequest::TableGet { .. }
+        | ControlRequest::ColumnList { .. }
+        | ControlRequest::IndexList { .. }
+        | ControlRequest::ConstraintList { .. }
+        | ControlRequest::CreateTable { .. }
+        | ControlRequest::DropTable { .. }
+        | ControlRequest::RenameTable { .. }
+        | ControlRequest::AddColumn { .. }
+        | ControlRequest::AlterColumn { .. }
+        | ControlRequest::DropColumn { .. }
+        | ControlRequest::RenameColumn { .. }
+        | ControlRequest::CreateIndex { .. }
+        | ControlRequest::DropIndex { .. }) => {
+            let session_id = runtime_session_id(&req);
+            if let Err(resp) = require_vault_session(state, request_id, session_id) {
+                return Ok(resp);
+            }
+            Ok(crate::runtime_ops::handle_runtime(state, request_id, req))
+        }
+    }
+}
+
+fn runtime_session_id(req: &ControlRequest) -> &str {
+    match req {
+        ControlRequest::ChannelList { session_id }
+        | ControlRequest::ChannelGet { session_id, .. }
+        | ControlRequest::ChannelConfigure { session_id, .. }
+        | ControlRequest::ChannelStart { session_id, .. }
+        | ControlRequest::ChannelStop { session_id, .. }
+        | ControlRequest::StreamList { session_id }
+        | ControlRequest::StreamGet { session_id, .. }
+        | ControlRequest::StreamCreate { session_id, .. }
+        | ControlRequest::StreamIngest { session_id, .. }
+        | ControlRequest::TriggerList { session_id }
+        | ControlRequest::TriggerGet { session_id, .. }
+        | ControlRequest::TriggerCreate { session_id, .. }
+        | ControlRequest::EventList { session_id, .. }
+        | ControlRequest::RuntimeSchema { session_id }
+        | ControlRequest::CatalogList { session_id }
+        | ControlRequest::DatabaseList { session_id }
+        | ControlRequest::SchemaList { session_id, .. }
+        | ControlRequest::TableList { session_id, .. }
+        | ControlRequest::TableGet { session_id, .. }
+        | ControlRequest::ColumnList { session_id, .. }
+        | ControlRequest::IndexList { session_id, .. }
+        | ControlRequest::ConstraintList { session_id, .. }
+        | ControlRequest::CreateTable { session_id, .. }
+        | ControlRequest::DropTable { session_id, .. }
+        | ControlRequest::RenameTable { session_id, .. }
+        | ControlRequest::AddColumn { session_id, .. }
+        | ControlRequest::AlterColumn { session_id, .. }
+        | ControlRequest::DropColumn { session_id, .. }
+        | ControlRequest::RenameColumn { session_id, .. }
+        | ControlRequest::CreateIndex { session_id, .. }
+        | ControlRequest::DropIndex { session_id, .. } => session_id,
+        _ => "",
     }
 }
 
@@ -704,7 +786,7 @@ fn map_validation_err(request_id: u64, err: ProtocolError) -> ResponseEnvelope<D
             ProtocolErrorCode::FrameTooLarge,
             "frame too large",
         ),
-        other => ResponseEnvelope::err(
+        _other => ResponseEnvelope::err(
             request_id,
             ProtocolErrorCode::InternalError,
             "internal error",

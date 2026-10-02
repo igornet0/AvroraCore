@@ -7,6 +7,8 @@ pub mod state;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
@@ -18,14 +20,31 @@ use crate::control::DEV_MASTER_FILE;
 use crate::control::sessions::ControlSessions;
 use crate::runtime::{DbStatus, Runtime};
 use crate::server::state::AppState;
+use dmc_ipc::{default_socket_path, CoreServer, SocketPathOptions};
 use dmc_security::{AuthManager, ui_auth_path};
+use dmc_server::{bootstrap_core_state_locked_with_hub, UnlockMaterial};
 
+/// HTTP admin + control plane, and co-host DMC IPC on the same [`Runtime::hub`].
 pub async fn run(addr: SocketAddr, ui_dist: Option<PathBuf>) -> Result<(), std::io::Error> {
     let paths = control::AvroraPaths::resolve();
     let db_path = paths.db_path.clone();
     let rt = Runtime::at_path(Path::new(&db_path));
     rt.set_capability_rotation_dir(paths.control_dir.clone());
     try_dev_unlock(&rt, &db_path);
+    spawn_dmc_ipc_adapter(&paths, rt.hub());
+    run_with_runtime(addr, ui_dist, rt).await
+}
+
+/// HTTP admin using an already-composed [`Runtime`] (shared hub owned by the caller).
+///
+/// Does **not** spawn DMC IPC — use this from `dmc serve --http` where IPC is primary.
+pub async fn run_with_runtime(
+    addr: SocketAddr,
+    ui_dist: Option<PathBuf>,
+    rt: Runtime,
+) -> Result<(), std::io::Error> {
+    let paths = control::AvroraPaths::resolve();
+
     let sched_rt = rt.clone();
     let sched_dir = paths.control_dir.clone();
     tokio::spawn(async move {
@@ -37,7 +56,7 @@ pub async fn run(addr: SocketAddr, ui_dist: Option<PathBuf>) -> Result<(), std::
         backup_scheduler::run(backup_sched_dir, backup_sched_rt).await;
     });
     let sessions = ControlSessions::new();
-    let auth = AuthManager::open(ui_auth_path(&db_path));
+    let auth = AuthManager::open(ui_auth_path(&paths.db_path));
     let state = AppState {
         runtime: rt.clone(),
         auth: auth.clone(),
@@ -87,6 +106,92 @@ pub async fn run(addr: SocketAddr, ui_dist: Option<PathBuf>) -> Result<(), std::
     let listener = tokio::net::TcpListener::bind(addr).await?;
     println!("Avrora listening on http://{addr}");
     axum::serve(listener, app).await
+}
+
+/// Co-host DMC IPC on the process-local RuntimeHub (P7.1).
+///
+/// Disable with `AVRORA_DMC_IPC=0`. Socket defaults to [`default_socket_path`],
+/// override with `AVRORA_DMC_SOCKET`.
+fn spawn_dmc_ipc_adapter(paths: &control::AvroraPaths, hub: dmc_runtime::RuntimeHub) {
+    if std::env::var("AVRORA_DMC_IPC")
+        .map(|v| matches!(v.as_str(), "0" | "false" | "off" | "no"))
+        .unwrap_or(false)
+    {
+        println!("DMC IPC adapter disabled (AVRORA_DMC_IPC=0)");
+        return;
+    }
+
+    let dmc_root = paths.control_dir.join("dmc-data");
+    if let Err(e) = std::fs::create_dir_all(&dmc_root) {
+        eprintln!("DMC IPC: cannot create {}: {e}", dmc_root.display());
+        return;
+    }
+
+    let socket = std::env::var_os("AVRORA_DMC_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(default_socket_path);
+
+    let (state, master) = bootstrap_core_state_locked_with_hub(&dmc_root, true, hub);
+    let master_path = dmc_root.join(".dmc-dev-master.hex");
+    if let Err(e) = write_master_hex(&master_path, &master) {
+        eprintln!("DMC IPC: write master failed: {e}");
+    }
+
+    let state = Arc::new(Mutex::new(state));
+    let socket_clone = socket.clone();
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let options = SocketPathOptions {
+            allow_custom_path: true,
+        };
+        let server = match CoreServer::bind(&socket_clone, &options) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = ready_tx.send(Err(e.to_string()));
+                return;
+            }
+        };
+        if ready_tx.send(Ok(())).is_err() {
+            return;
+        }
+        loop {
+            let mut guard = match state.lock() {
+                Ok(g) => g,
+                Err(e) => e.into_inner(),
+            };
+            if server.accept_and_serve_one(&mut guard).is_err() {
+                break;
+            }
+        }
+    });
+
+    match ready_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        Ok(Ok(())) => {
+            println!(
+                "DMC IPC listening on {} (shared RuntimeHub with HTTP)",
+                socket.display()
+            );
+            println!("DMC data root {}", dmc_root.display());
+        }
+        Ok(Err(e)) => eprintln!("DMC IPC bind failed: {e}"),
+        Err(_) => eprintln!("DMC IPC bind timed out"),
+    }
+}
+
+fn write_master_hex(path: &Path, material: &UnlockMaterial) -> Result<(), String> {
+    std::fs::create_dir_all(
+        path.parent()
+            .ok_or_else(|| "master path has no parent".to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    std::fs::write(path, hex::encode(material.0)).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn try_dev_unlock(rt: &Runtime, db_path: &Path) {

@@ -6,14 +6,12 @@ use dmc_vault::key::KeyPath;
 use dmc_vault::persist::OverlayRecord;
 use serde::{Deserialize, Serialize};
 
-use crate::channel::{ChannelRegistry, ChannelSpec};
 use crate::error::{Error, Result};
 use crate::event::{CoreEvent, EventKind};
 use crate::ids::{SessionId, StreamId};
 use crate::overlay::{OverlayPatch, OverlayStore};
-use crate::stream::{StreamManager, StreamSpec};
 use crate::subscription::{Subscription, SubscriptionManager};
-use crate::trigger::{TriggerDef, TriggerEngine};
+use dmc_runtime::RuntimeHub;
 use dmc_security::AccessControl;
 use dmc_vault::store::EncryptedKv;
 use dmc_vault::Capability;
@@ -119,9 +117,7 @@ pub struct Materializer<'a> {
     pub kv: &'a mut EncryptedKv,
     pub access: &'a mut AccessControl,
     pub overlay: &'a mut OverlayStore,
-    pub channels: &'a mut ChannelRegistry,
-    pub streams: &'a mut StreamManager,
-    pub triggers: &'a mut TriggerEngine,
+    pub hub: &'a RuntimeHub,
     pub subscriptions: &'a mut SubscriptionManager,
     pub offsets: &'a mut HashMap<String, ConsumerOffset>,
     pub seen: &'a mut HashSet<[u8; 16]>,
@@ -171,13 +167,7 @@ impl Materializer<'_> {
             }
             Operation::RuntimeConfig => {
                 let body: RuntimeConfigBody = decode_cbor(&entry.payload)?;
-                apply_runtime(
-                    self.channels,
-                    self.streams,
-                    self.triggers,
-                    self.subscriptions,
-                    &body,
-                )?;
+                apply_runtime(self.hub, self.subscriptions, &body)?;
             }
             Operation::ConsumerOffset => {
                 let body: ConsumerOffset = decode_cbor(&entry.payload)?;
@@ -215,33 +205,25 @@ fn apply_role(access: &mut AccessControl, body: &RoleConfigBody) -> Result<()> {
 }
 
 fn apply_runtime(
-    channels: &mut ChannelRegistry,
-    streams: &mut StreamManager,
-    triggers: &mut TriggerEngine,
+    hub: &RuntimeHub,
     subscriptions: &mut SubscriptionManager,
     body: &RuntimeConfigBody,
 ) -> Result<()> {
     match body.kind.as_str() {
         "channel" => {
-            let spec: ChannelSpec = serde_json::from_value(body.spec.clone())
+            let spec: crate::channel::ChannelSpec = serde_json::from_value(body.spec.clone())
                 .map_err(|e| Error::Invalid(e.to_string()))?;
-            if channels.get(&spec.id).is_err() {
-                channels.configure(spec)?;
-            }
+            hub.ensure_channel(spec)?;
         }
         "stream" => {
-            let spec: StreamSpec = serde_json::from_value(body.spec.clone())
+            let spec: crate::stream::StreamSpec = serde_json::from_value(body.spec.clone())
                 .map_err(|e| Error::Invalid(e.to_string()))?;
-            if streams.get(&spec.id).is_err() {
-                streams.create(spec)?;
-            }
+            hub.ensure_stream(spec)?;
         }
         "trigger" => {
-            let def: TriggerDef = serde_json::from_value(body.spec.clone())
+            let def: crate::trigger::TriggerDef = serde_json::from_value(body.spec.clone())
                 .map_err(|e| Error::Invalid(e.to_string()))?;
-            if !triggers.list().iter().any(|t| t.id == def.id) {
-                triggers.register(def)?;
-            }
+            hub.ensure_trigger(def)?;
         }
         "subscription" => {
             let sub: Subscription = serde_json::from_value(body.spec.clone())

@@ -38,9 +38,9 @@ pub use materialized::MaterializedDataSource;
 pub use journal::{journal_result, JournalBackend, values_to_row_values, value_to_row_value};
 pub use error::{ExecutionError, Result};
 pub use executor::{
-    build_executor, collect_rows, execute_authorized_sql, execute_bound_statement, execute_plan,
-    execute_sql_pipeline, execute_transaction_statement, plan_and_execute_query, Executor,
-    SharedContext,
+    build_executor, collect_rows, execute_authorized_sql, execute_bound_statement,
+    execute_catalog_statement, execute_plan, execute_sql_pipeline, execute_transaction_statement,
+    plan_and_execute_query, Executor, SharedContext,
 };
 pub use expression::{
     bound_expr_data_type, evaluate, evaluate_predicate, evaluate_vector, ExpressionEvaluator,

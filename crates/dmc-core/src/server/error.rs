@@ -95,6 +95,12 @@ impl From<dmc_vault::Error> for ApiError {
     }
 }
 
+impl From<dmc_runtime::Error> for ApiError {
+    fn from(err: dmc_runtime::Error) -> Self {
+        Error::from(err).into()
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (

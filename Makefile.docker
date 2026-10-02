@@ -1,0 +1,170 @@
+# AvroraCore — Docker lifecycle for the local DBMS stack
+#
+#   cd AvroraCore && make -f Makefile.docker help
+#   make -f Makefile.docker up          # production-like (random secrets)
+#   make -f Makefile.docker up-dev      # DEV: fixed secrets from docker/env.dev
+#
+# Requires: Docker Engine + Compose v2 (build additional_contexts) + sibling ../AvroraClient
+# Run from the AvroraCore directory (paths with spaces break make's $(lastword)).
+
+# Do not use $(lastword $(MAKEFILE_LIST)) — absolute -f paths with spaces are split.
+ROOT         := $(CURDIR)
+COMPOSE_FILE := $(ROOT)/docker-compose.yml
+COMPOSE_DEV  := $(ROOT)/docker-compose.dev.yml
+ENV_DEV      := $(ROOT)/docker/env.dev
+
+# Quotes stay in the recipe shell line (needed for paths with spaces).
+DOCKER_COMPOSE     = docker compose -f "$(COMPOSE_FILE)" --project-directory "$(ROOT)"
+DOCKER_COMPOSE_DEV = docker compose -f "$(COMPOSE_DEV)" --project-directory "$(ROOT)" --env-file "$(ENV_DEV)"
+
+IMAGE        ?= avrora-core:local
+RUST_VERSION ?= 1.88
+NODE_VERSION ?= 22
+INVITE_HOST  ?= 127.0.0.1
+INVITE_PORT  ?= 7432
+
+export AVRORA_IMAGE := $(IMAGE)
+export RUST_VERSION NODE_VERSION INVITE_HOST INVITE_PORT
+
+.PHONY: help build rebuild up down stop start restart ps status logs \
+	logs-avrora logs-sql shell shell-sql invite init status-avrora \
+	up-dev down-dev restart-dev logs-dev ps-dev credentials destroy-dev \
+	invite-dev init-dev pull clean destroy
+
+help:
+	@echo "AvroraCore Docker (СУБД)"
+	@echo ""
+	@echo "  Run from AvroraCore/:  make -f Makefile.docker <target>"
+	@echo ""
+	@echo "  Production-like (random secrets on first boot):"
+	@echo "    make -f Makefile.docker build|rebuild|up|down|logs|…"
+	@echo ""
+	@echo "  DEV (fixed keys in docker/env.dev):"
+	@echo "    make -f Makefile.docker up-dev       Build + start avrora + sql"
+	@echo "    make -f Makefile.docker invite-dev   Print invite.json for AvroraClient"
+	@echo "    make -f Makefile.docker credentials  Print UI / vault / SQL secrets"
+	@echo "    make -f Makefile.docker logs-dev"
+	@echo "    make -f Makefile.docker down-dev"
+	@echo "    make -f Makefile.docker destroy-dev   Wipe volume avrora-core-dev-data"
+	@echo ""
+	@echo "  Shared:"
+	@echo "    make -f Makefile.docker build       Build image $(IMAGE)"
+	@echo "    make -f Makefile.docker shell       Shell in avrora (prod compose)"
+	@echo ""
+	@echo "Endpoints (defaults):"
+	@echo "  UI        http://127.0.0.1:18787"
+	@echo "  Control   127.0.0.1:7432  (TLS)"
+	@echo "  SQL       127.0.0.1:15432 (pgwire)"
+	@echo ""
+	@echo "DEV login: see docker/env.dev (Access Key + TOTP)."
+	@echo "  oathtool --totp -b \$$(grep AVRORA_UI_TOTP_SECRET docker/env.dev | cut -d= -f2)"
+
+build:
+	@test -d "$(ROOT)/../AvroraClient" || { \
+		echo "missing sibling AvroraClient at $(ROOT)/../AvroraClient" >&2; \
+		exit 1; \
+	}
+	$(DOCKER_COMPOSE) build
+
+rebuild:
+	@test -d "$(ROOT)/../AvroraClient" || { \
+		echo "missing sibling AvroraClient at $(ROOT)/../AvroraClient" >&2; \
+		exit 1; \
+	}
+	$(DOCKER_COMPOSE) build --no-cache
+
+up: build
+	$(DOCKER_COMPOSE) up -d
+	@echo ""
+	@echo "Avrora UI:      http://127.0.0.1:$${AVRORA_HTTP_PORT:-18787}"
+	@echo "Control Plane:  127.0.0.1:$${AVRORA_CONTROL_PORT:-7432}"
+	@echo "SQL / pgwire:   127.0.0.1:$${SQL_PORT:-15432}"
+	@echo "Invite / logs:  make -f Makefile.docker invite | logs"
+
+up-dev: build
+	@test -f "$(ENV_DEV)" || { echo "missing $(ENV_DEV)" >&2; exit 1; }
+	$(DOCKER_COMPOSE_DEV) up -d --build
+	@echo ""
+	@echo "DEV stack up (secrets: docker/env.dev)"
+	@echo "  UI:      http://127.0.0.1:$${AVRORA_HTTP_PORT:-18787}"
+	@echo "  Control: 127.0.0.1:$${AVRORA_CONTROL_PORT:-7432}"
+	@echo "  SQL:     127.0.0.1:$${SQL_PORT:-15432}"
+	@$(MAKE) -f Makefile.docker credentials
+
+down:
+	$(DOCKER_COMPOSE) down
+
+down-dev:
+	$(DOCKER_COMPOSE_DEV) down
+
+stop:
+	$(DOCKER_COMPOSE) stop
+
+start:
+	$(DOCKER_COMPOSE) start
+
+restart:
+	$(DOCKER_COMPOSE) restart
+
+restart-dev:
+	$(DOCKER_COMPOSE_DEV) restart
+
+ps status:
+	$(DOCKER_COMPOSE) ps
+
+ps-dev:
+	$(DOCKER_COMPOSE_DEV) ps
+
+logs:
+	$(DOCKER_COMPOSE) logs -f --tail=200
+
+logs-dev:
+	$(DOCKER_COMPOSE_DEV) logs -f --tail=200
+
+logs-avrora:
+	$(DOCKER_COMPOSE) logs -f --tail=200 avrora
+
+logs-sql:
+	$(DOCKER_COMPOSE) logs -f --tail=200 sql
+
+shell:
+	$(DOCKER_COMPOSE) exec avrora /bin/sh
+
+shell-sql:
+	$(DOCKER_COMPOSE) exec sql /bin/sh
+
+invite:
+	$(DOCKER_COMPOSE) exec avrora docker-entrypoint.sh invite
+
+invite-dev:
+	$(DOCKER_COMPOSE_DEV) exec avrora docker-entrypoint.sh invite
+	@echo ""
+	@echo "Full invite JSON:"
+	@$(DOCKER_COMPOSE_DEV) exec avrora cat /var/lib/avrora/control/invite.json
+
+init:
+	$(DOCKER_COMPOSE) exec avrora docker-entrypoint.sh init
+
+init-dev:
+	$(DOCKER_COMPOSE_DEV) exec avrora docker-entrypoint.sh init
+
+status-avrora:
+	$(DOCKER_COMPOSE) exec avrora avrora status
+
+credentials:
+	@echo "── docker/env.dev credentials ──"
+	@awk -F= '/^(AVRORA_UI_ACCESS_KEY|AVRORA_UI_TOTP_SECRET|AVRORA_MASTER_KEY_HEX|SQL_MASTER_KEY_HEX)=/{print}' "$(ENV_DEV)"
+	@secret=$$(awk -F= '/^AVRORA_UI_TOTP_SECRET=/{print $$2}' "$(ENV_DEV)"); \
+	  echo "otpauth://totp/Avrora:ui?secret=$${secret}&issuer=Avrora"; \
+	  echo "TOTP: oathtool --totp -b $${secret}"
+
+clean: down
+	-docker image rm "$(IMAGE)" 2>/dev/null || true
+
+destroy: clean
+	-docker volume rm avrora-core-data 2>/dev/null || true
+	@echo "volume avrora-core-data removed (if present)"
+
+destroy-dev: down-dev
+	-docker volume rm avrora-core-dev-data 2>/dev/null || true
+	@echo "volume avrora-core-dev-data removed (if present)"

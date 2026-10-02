@@ -11,12 +11,15 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 dmc-client = { path = "../dmc-client" }
+dmc-core = { path = "../dmc-core" }
 dmc-ipc = { path = "../dmc-ipc" }
 dmc-ops = { path = "../dmc-ops" }
 dmc-protocol = { path = "../dmc-protocol" }
+dmc-runtime = { path = "../dmc-runtime" }
 dmc-server = { path = "../dmc-server" }
 dmc-vault = { path = "../dmc-vault" }
 hex = "0.4"
 rpassword = "7"
 serde_json = "1"
 thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

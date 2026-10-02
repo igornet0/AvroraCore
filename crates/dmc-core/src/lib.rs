@@ -67,6 +67,7 @@ pub use dmc_journal::{
 };
 pub use journal_pins::{ConsumerPin, PinReason, ReplayPin, RetentionPolicyPin, SnapshotPin};
 pub use retention_meta::RetentionPolicy;
+pub use dmc_runtime::{RuntimeHub, RuntimeSchemaSnapshot};
 pub use runtime::{
     ConsumerLag, ConsumerMetrics, DbStatus, PendingSummary, PutOptions, PutResult, Runtime,
     SchemaSnapshot,

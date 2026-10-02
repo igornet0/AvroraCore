@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use dmc_observability::{Audit, Metrics, Observability, Readiness};
 use dmc_protocol::{ProtocolError, ProtocolErrorCode, RemoteLimits};
+use dmc_runtime::RuntimeHub;
 use dmc_security::auth::AuthService;
 use dmc_sql_exec::ExecutionContext;
 
@@ -72,6 +73,8 @@ pub struct CoreServerState {
     /// Opaque data root for backups/restores (never exposed to UI as a browseable tree).
     pub data_root: PathBuf,
     pub unlock_gate: UnlockGate,
+    /// Shared channels/streams/triggers/events domain (HTTP + DMC).
+    pub runtime: RuntimeHub,
     /// Structured logging facade (7.9.2) — observational only.
     pub observability: Observability,
     /// Metrics facade (7.9.4) — observational only.
@@ -100,6 +103,16 @@ impl CoreServerState {
         ctx: ExecutionContext,
         data_root: PathBuf,
     ) -> Result<(Self, UnlockMaterial), dmc_protocol::ProtocolError> {
+        Self::new_locked_with_hub(auth, ctx, data_root, RuntimeHub::new())
+    }
+
+    /// Same as [`Self::new_locked`], but inject a shared [`RuntimeHub`] (HTTP + DMC).
+    pub fn new_locked_with_hub(
+        auth: AuthService,
+        ctx: ExecutionContext,
+        data_root: PathBuf,
+        runtime: RuntimeHub,
+    ) -> Result<(Self, UnlockMaterial), dmc_protocol::ProtocolError> {
         let (unlock_gate, master) = UnlockGate::create_locked()?;
         Ok((
             Self {
@@ -107,6 +120,7 @@ impl CoreServerState {
                 ctx,
                 data_root,
                 unlock_gate,
+                runtime,
                 observability: Observability::tracing(),
                 metrics: Metrics::tracing(),
                 audit: Audit::tracing(),
@@ -124,6 +138,15 @@ impl CoreServerState {
             },
             master,
         ))
+    }
+
+    /// Replace the runtime hub (composition / tests). Same Arc as HTTP adapter when shared.
+    pub fn set_runtime_hub(&mut self, runtime: RuntimeHub) {
+        self.runtime = runtime;
+    }
+
+    pub fn runtime_hub(&self) -> &RuntimeHub {
+        &self.runtime
     }
 
     /// Install config-backed limits (called from `start_core` / tests).

@@ -5,6 +5,8 @@ pub const DEFAULT_MAX_PARAMETER_SIZE: u32 = 65_536;
 pub const DEFAULT_MAX_IN_FLIGHT_REQUESTS: u32 = 32;
 pub const DEFAULT_MAX_REQUESTS_PER_CONNECTION: u32 = 10_000;
 pub const DEFAULT_MAX_UNLOCK_BLOB_SIZE: u32 = 4096;
+pub const DEFAULT_MAX_RUNTIME_ID_LEN: u32 = 128;
+pub const DEFAULT_MAX_INGEST_PAYLOAD: u32 = 65_536;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProtocolLimits {
@@ -39,6 +41,8 @@ pub struct RemoteLimits {
     pub max_in_flight_requests: u32,
     pub max_requests_per_connection: u32,
     pub max_unlock_blob_size: u32,
+    pub max_runtime_id_len: u32,
+    pub max_ingest_payload: u32,
 }
 
 impl Default for RemoteLimits {
@@ -55,6 +59,8 @@ impl Default for RemoteLimits {
             max_in_flight_requests: DEFAULT_MAX_IN_FLIGHT_REQUESTS,
             max_requests_per_connection: DEFAULT_MAX_REQUESTS_PER_CONNECTION,
             max_unlock_blob_size: DEFAULT_MAX_UNLOCK_BLOB_SIZE,
+            max_runtime_id_len: DEFAULT_MAX_RUNTIME_ID_LEN,
+            max_ingest_payload: DEFAULT_MAX_INGEST_PAYLOAD,
         }
     }
 }

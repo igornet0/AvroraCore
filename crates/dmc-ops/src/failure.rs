@@ -163,7 +163,8 @@ pub fn classify_protocol(code: ProtocolErrorCode) -> FailureClass {
         | ProtocolErrorCode::BackupInvalid
         | ProtocolErrorCode::BackupTargetNotEmpty
         | ProtocolErrorCode::RecoveryNotReady
-        | ProtocolErrorCode::BackupNotFound => FailureClass::RejectOnly,
+        | ProtocolErrorCode::BackupNotFound
+        | ProtocolErrorCode::Unsupported => FailureClass::RejectOnly,
         // InternalError on wire stays reject-only for a live Core — fatal paths use Startup/Shutdown.
         ProtocolErrorCode::InternalError => FailureClass::RejectOnly,
     }

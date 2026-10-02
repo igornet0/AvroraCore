@@ -7,6 +7,7 @@ mod client;
 mod control;
 mod error;
 mod keypass;
+mod runtime;
 mod session;
 mod sql;
 mod transport;
@@ -25,7 +26,18 @@ pub use types::{
     VaultState,
 };
 
-pub use dmc_protocol::{DiagnosticsWire, ProtocolErrorCode, SqlParam, SqlResult, SqlRow};
+pub use runtime::{
+    CatalogClient, CatalogListOptions, CatalogPage, ChannelClient, DdlClient, EventClient,
+    StreamClient, TriggerClient,
+};
+pub use dmc_protocol::{
+    CatalogColumnWire, CatalogConstraintKindWire, CatalogConstraintWire, CatalogDatabaseWire,
+    CatalogIndexWire, CatalogPageMetaWire, CatalogSchemaWire, CatalogSnapshotWire,
+    CatalogTableSummaryWire, CatalogTableWire, ChannelInfoWire, ChannelKindWire, ChannelSpecWire,
+    ColumnDefWire, DiagnosticsWire, ProtocolErrorCode, RuntimeEventWire, SchemaMutationResultWire,
+    SchemaSnapshotWire, ServerCapabilities, SqlParam, SqlResult, SqlRow, StreamDirectionWire,
+    StreamSpecWire, TriggerActionWire, TriggerDefWire,
+};
 pub use dmc_server::{
     create_unlock_blob, KeyPassBundle, KeyPassError, KeyPassProvider, MockKeyPassProvider,
     PasswordKeyPassProvider, UnlockMaterial,

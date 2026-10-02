@@ -20,7 +20,21 @@ pub struct StorageEngine {
 
 impl StorageEngine {
     pub fn create(path: impl AsRef<Path>) -> Result<(Self, String)> {
-        let (tree, master) = KeyTree::create_new()?;
+        Self::create_with_master(path, None)
+    }
+
+    /// Create with an optional fixed master hex (docker / env.dev fixtures).
+    pub fn create_with_master(
+        path: impl AsRef<Path>,
+        master_hex: Option<&str>,
+    ) -> Result<(Self, String)> {
+        let (tree, master) = match master_hex.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(hex) => {
+                let master = KeyMaterial::from_hex(hex)?;
+                KeyTree::create_with_master(master)?
+            }
+            None => KeyTree::create_new()?,
+        };
         let mut engine = Self {
             db_path: path.as_ref().to_path_buf(),
             kv: EncryptedKv::new(tree),

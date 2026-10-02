@@ -30,6 +30,42 @@ Open http://127.0.0.1:18787 (or Vite http://127.0.0.1:5173).
 
 Env: `AVRORA_ADDR`, `AVRORA_DATA`, `AVRORA_CONTROL_ADDR` (default `0.0.0.0:7432`), `AVRORA_CONTROL_DIR`.
 
+### Docker (local DBMS)
+
+Requires sibling [`AvroraClient`](../AvroraClient) (build context for `avrora-proto`) and Docker Compose v2.
+
+**DEV (recommended for local work)** — fixed secrets in [`docker/env.dev`](docker/env.dev):
+
+```bash
+make -f Makefile.docker up-dev
+make -f Makefile.docker credentials   # Access Key, TOTP, master keys
+make -f Makefile.docker logs-dev
+make -f Makefile.docker destroy-dev   # wipe volume + recreate next up-dev
+```
+
+| Secret | Variable | Rust constant |
+|--------|----------|---------------|
+| UI Access Key | `AVRORA_UI_ACCESS_KEY` | `dmc_security::dev::UI_ACCESS_KEY` |
+| TOTP (base32) | `AVRORA_UI_TOTP_SECRET` | `dmc_security::dev::UI_TOTP_SECRET` |
+| Vault Master | `AVRORA_MASTER_KEY_HEX` | `dmc_core::control::dev::MASTER_KEY_HEX` |
+| SQL Master | `SQL_MASTER_KEY_HEX` | `dmc_core::control::dev::SQL_MASTER_KEY_HEX` |
+
+**Production-like** (random secrets on first boot):
+
+```bash
+make -f Makefile.docker up
+make -f Makefile.docker invite
+make -f Makefile.docker down
+```
+
+| Port | Service |
+|------|---------|
+| `18787` | HTTP admin UI |
+| `7432` | Control Plane (TLS / mTLS) |
+| `15432` | SQL / pgwire (`dmc-pgwire`) |
+
+DEV data: volume `avrora-core-dev-data`. Prod-like: `avrora-core-data`. Overrides: `docker/env.example`.
+
 First-time control plane:
 
 ```bash

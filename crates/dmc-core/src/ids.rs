@@ -47,9 +47,8 @@ macro_rules! id_newtype {
     };
 }
 
-id_newtype!(StreamId);
-id_newtype!(ChannelId);
-id_newtype!(TriggerId);
+pub use dmc_runtime::{ChannelId, StreamId, TriggerId};
+
 id_newtype!(SubsystemId);
 id_newtype!(SubscriptionId);
 id_newtype!(ConsumerId);

@@ -68,7 +68,11 @@ struct RuntimeNode {
 impl KeyTree {
     /// Create a new DB: returns (tree, master_secret). Master must be shown once and never stored.
     pub fn create_new() -> Result<(Self, KeyMaterial)> {
-        let master = KeyMaterial::random();
+        Self::create_with_master(KeyMaterial::random())
+    }
+
+    /// Create a new DB with a predetermined master (dev / docker fixtures).
+    pub fn create_with_master(master: KeyMaterial) -> Result<(Self, KeyMaterial)> {
         let mut salt = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut salt);
         let root_kek = derive_child_key(&master, &salt, ROOT_KEK_INFO);

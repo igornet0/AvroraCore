@@ -29,6 +29,8 @@ pub enum FrontendErrorCode {
     BackupTargetNotEmpty,
     RecoveryNotReady,
     BackupNotFound,
+    Unsupported,
+    ResourceNotFound,
     InternalError,
 }
 
@@ -48,6 +50,8 @@ impl std::fmt::Display for FrontendErrorCode {
             Self::BackupTargetNotEmpty => "BackupTargetNotEmpty",
             Self::RecoveryNotReady => "RecoveryNotReady",
             Self::BackupNotFound => "BackupNotFound",
+            Self::Unsupported => "Unsupported",
+            Self::ResourceNotFound => "ResourceNotFound",
             Self::InternalError => "InternalError",
         })
     }
@@ -111,6 +115,8 @@ impl FrontendError {
             ProtocolErrorCode::BackupTargetNotEmpty => FrontendErrorCode::BackupTargetNotEmpty,
             ProtocolErrorCode::RecoveryNotReady => FrontendErrorCode::RecoveryNotReady,
             ProtocolErrorCode::BackupNotFound => FrontendErrorCode::BackupNotFound,
+            ProtocolErrorCode::Unsupported => FrontendErrorCode::Unsupported,
+            ProtocolErrorCode::ResourceNotFound => FrontendErrorCode::ResourceNotFound,
             _ => FrontendErrorCode::InternalError,
         };
         Self::new(mapped, message)

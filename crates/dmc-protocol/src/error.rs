@@ -37,6 +37,7 @@ pub enum ProtocolErrorCode {
     BackupTargetNotEmpty = 29,
     RecoveryNotReady = 30,
     BackupNotFound = 31,
+    Unsupported = 32,
 }
 
 impl ProtocolErrorCode {
@@ -73,6 +74,7 @@ impl ProtocolErrorCode {
             Self::BackupTargetNotEmpty => "BackupTargetNotEmpty",
             Self::RecoveryNotReady => "RecoveryNotReady",
             Self::BackupNotFound => "BackupNotFound",
+            Self::Unsupported => "Unsupported",
         }
     }
 }

@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use dmc_core::control::{
     self, AvroraPaths, CapabilityRotationConfig, control_port_from_env, format_devo_init,
     format_status, load_backup_config, load_capability_rotation, reset_server_data, resolve_ui_dist,
-    run_devo_init, run_init, save_backup_config, save_capability_rotation, BackupConfig,
+    run_devo_init_ex, run_init, save_backup_config, save_capability_rotation, BackupConfig,
     ServerConfig,
 };
 use dmc_core::runtime::{DbStatus, Runtime};
@@ -72,12 +72,15 @@ enum Cmd {
         /// Seed demo org tree and scoped roles (finance/hr)
         #[arg(long)]
         demo: bool,
-        /// Master key hex when vault is locked (default: read .avrora-dev-master.hex)
+        /// Master key hex when vault is empty (fixed create) or locked (unlock)
         #[arg(long)]
         master_hex: Option<String>,
-        /// UI access key for browser login (default: avrora-dev-ui-key)
+        /// UI access key for browser login (default: see `dmc_security::dev::UI_ACCESS_KEY`)
         #[arg(long)]
         ui_access_key: Option<String>,
+        /// Fixed TOTP base32 secret for UI 2FA (default fixture: `dmc_security::dev::UI_TOTP_SECRET`)
+        #[arg(long)]
+        ui_totp_secret: Option<String>,
         /// Do not write .avrora-dev-master.hex when a new vault is created
         #[arg(long)]
         no_write_master: bool,
@@ -182,8 +185,19 @@ async fn main() {
             demo,
             master_hex,
             ui_access_key,
+            ui_totp_secret,
             no_write_master,
-        } => cmd_devo_init(data_dir, demo, master_hex, ui_access_key, no_write_master).await,
+        } => {
+            cmd_devo_init(
+                data_dir,
+                demo,
+                master_hex,
+                ui_access_key,
+                ui_totp_secret,
+                no_write_master,
+            )
+            .await
+        }
         Cmd::Menu => {
             let handle = tokio::runtime::Handle::current();
             let err = tokio::task::block_in_place(|| dmc_core::menu::run(&handle));
@@ -465,6 +479,7 @@ async fn cmd_devo_init(
     demo: bool,
     master_hex: Option<String>,
     ui_access_key: Option<String>,
+    ui_totp_secret: Option<String>,
     no_write_master: bool,
 ) {
     let mut paths = AvroraPaths::resolve();
@@ -473,12 +488,13 @@ async fn cmd_devo_init(
         paths.control_dir = control::control_dir(&dir);
     }
     let rt = Runtime::at_path(&paths.db_path);
-    match run_devo_init(
+    match run_devo_init_ex(
         &rt,
         demo,
         master_hex.as_deref(),
         !no_write_master,
         ui_access_key.as_deref(),
+        ui_totp_secret.as_deref(),
     )
     .await
     {

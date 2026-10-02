@@ -12,6 +12,7 @@ use dmc_backup::{
 use dmc_materialized::StateMaterializer;
 use dmc_model::Catalog;
 use dmc_security::auth::AuthService;
+use dmc_runtime::RuntimeHub;
 use dmc_server::{CoreServerState, UnlockMaterial};
 use dmc_sql_exec::{ExecutionContext, JournalBackend};
 use serde::{Deserialize, Serialize};
@@ -24,17 +25,34 @@ use crate::limits::RuntimeLimitPolicy;
 use crate::validate::validate_config;
 
 /// Options for [`start_core`] — never includes unlock material or session restore.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct StartupOptions {
     /// When stores are empty, apply `Catalog::bootstrap_default` events.
     pub bootstrap_empty_catalog: bool,
+    /// Shared hub for co-hosted HTTP / future WebSocket adapters (one per process).
+    pub runtime_hub: Option<RuntimeHub>,
+}
+
+impl std::fmt::Debug for StartupOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StartupOptions")
+            .field("bootstrap_empty_catalog", &self.bootstrap_empty_catalog)
+            .field("runtime_hub", &self.runtime_hub.as_ref().map(|_| "<RuntimeHub>"))
+            .finish()
+    }
 }
 
 impl StartupOptions {
     pub fn production() -> Self {
         Self {
             bootstrap_empty_catalog: true,
+            runtime_hub: None,
         }
+    }
+
+    pub fn with_runtime_hub(mut self, hub: RuntimeHub) -> Self {
+        self.runtime_hub = Some(hub);
+        self
     }
 }
 
@@ -174,9 +192,17 @@ fn start_inner(
     let auth = AuthService::new();
 
     let policy = RuntimeLimitPolicy::from_validated_config(&config);
-    let (mut server, unlock_material) =
-        CoreServerState::new_locked(auth, ctx, layout.data_root().to_path_buf())
-            .map_err(|e| StartupError::Vault(e.to_string()))?;
+    let hub = options
+        .runtime_hub
+        .clone()
+        .unwrap_or_else(RuntimeHub::new);
+    let (mut server, unlock_material) = CoreServerState::new_locked_with_hub(
+        auth,
+        ctx,
+        layout.data_root().to_path_buf(),
+        hub,
+    )
+    .map_err(|e| StartupError::Vault(e.to_string()))?;
     server.set_limits(policy.to_remote_limits());
 
     if !matches!(server.vault_state(), dmc_server::VaultState::Locked) {

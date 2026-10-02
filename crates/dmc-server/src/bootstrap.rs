@@ -5,6 +5,8 @@ use dmc_model::{ApplyMode, Catalog, CatalogApplier};
 use dmc_security::auth::{Action, AuthService, Resource};
 use dmc_sql_exec::{ExecutionContext, JournalBackend};
 
+use dmc_runtime::RuntimeHub;
+
 use crate::state::CoreServerState;
 use crate::unlock_blob::UnlockMaterial;
 
@@ -12,24 +14,50 @@ use crate::unlock_blob::UnlockMaterial;
 ///
 /// Returns one-time master for client KeyPass wrap (caller must not put it in SecurityState).
 pub fn bootstrap_core_state(root: &Path, users_table: bool) -> (CoreServerState, UnlockMaterial) {
-    bootstrap_core_state_inner(root, users_table)
+    bootstrap_core_state_inner(root, users_table, RuntimeHub::new())
 }
 
 /// Same as [`bootstrap_core_state`] — locked vault (UnlockGate / Key Management tests).
 pub fn bootstrap_core_state_locked(root: &Path, users_table: bool) -> (CoreServerState, UnlockMaterial) {
-    bootstrap_core_state_inner(root, users_table)
+    bootstrap_core_state_inner(root, users_table, RuntimeHub::new())
+}
+
+/// Locked bootstrap that shares an existing [`RuntimeHub`] with HTTP / other adapters.
+pub fn bootstrap_core_state_locked_with_hub(
+    root: &Path,
+    users_table: bool,
+    hub: RuntimeHub,
+) -> (CoreServerState, UnlockMaterial) {
+    bootstrap_core_state_inner(root, users_table, hub)
 }
 
 /// Test helper for Phase 7.1–7.5 SQL / transport fixtures: vault starts Unlocked.
 pub fn bootstrap_core_state_unlocked_for_test(root: &Path, users_table: bool) -> CoreServerState {
-    let (mut state, master) = bootstrap_core_state_inner(root, users_table);
+    let (mut state, master) = bootstrap_core_state_inner(root, users_table, RuntimeHub::new());
     state
         .apply_vault_unlock(&master)
         .expect("test unlock");
     state
 }
 
-fn bootstrap_core_state_inner(root: &Path, users_table: bool) -> (CoreServerState, UnlockMaterial) {
+/// Unlocked test bootstrap with a shared hub (HTTP + DMC same process).
+pub fn bootstrap_core_state_unlocked_with_hub_for_test(
+    root: &Path,
+    users_table: bool,
+    hub: RuntimeHub,
+) -> CoreServerState {
+    let (mut state, master) = bootstrap_core_state_inner(root, users_table, hub);
+    state
+        .apply_vault_unlock(&master)
+        .expect("test unlock");
+    state
+}
+
+fn bootstrap_core_state_inner(
+    root: &Path,
+    users_table: bool,
+    hub: RuntimeHub,
+) -> (CoreServerState, UnlockMaterial) {
     let mut catalog = Catalog::new();
     let mut events = catalog.bootstrap_default().unwrap();
     if users_table {
@@ -80,7 +108,8 @@ fn bootstrap_core_state_inner(root: &Path, users_table: bool) -> (CoreServerStat
 
     let auth = dev_auth_service();
 
-    CoreServerState::new_locked(auth, ctx, root.to_path_buf()).expect("vault create")
+    CoreServerState::new_locked_with_hub(auth, ctx, root.to_path_buf(), hub)
+        .expect("vault create")
 }
 
 /// Dev/demo auth: `analyst` / `pw` with grants for the default `avrora` catalog.
@@ -117,7 +146,21 @@ pub fn dev_auth_service() -> AuthService {
         Resource::schema("avrora", "public"),
         Action::Create,
     );
+    auth.grants_mut().grant(
+        identity.clone(),
+        Resource::schema("avrora", "public"),
+        Action::Drop,
+    );
     auth.grants_mut()
-        .grant(identity, Resource::database("avrora"), Action::Create);
+        .grant(identity.clone(), Resource::database("avrora"), Action::Create);
+    for table in ["users", "items"] {
+        for action in [Action::Create, Action::Drop] {
+            auth.grants_mut().grant(
+                identity.clone(),
+                Resource::table("avrora", "public", table),
+                action,
+            );
+        }
+    }
     auth
 }

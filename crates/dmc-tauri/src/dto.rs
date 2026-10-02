@@ -107,6 +107,24 @@ pub struct BackupStatusUi {
     pub sessions_invalid: bool,
 }
 
+/// Paged catalog response for lazy Navigator loading.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CatalogPageUi<T> {
+    pub items: Vec<T>,
+    pub next_cursor: Option<String>,
+    pub truncated: bool,
+}
+
+impl<T> From<dmc_client::CatalogPage<T>> for CatalogPageUi<T> {
+    fn from(page: dmc_client::CatalogPage<T>) -> Self {
+        Self {
+            items: page.items,
+            next_cursor: page.next_cursor,
+            truncated: page.truncated,
+        }
+    }
+}
+
 /// UI-facing diagnostics snapshot (7.9.7). Mirrors Control DiagnosticsWire — no secrets.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiagnosticsUi {

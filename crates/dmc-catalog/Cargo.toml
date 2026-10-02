@@ -1,0 +1,11 @@
+[package]
+name = "dmc-catalog"
+version.workspace = true
+edition.workspace = true
+description = "Typed SQL catalog / metadata service (P7.2)"
+
+[dependencies]
+dmc-model = { path = "../dmc-model" }
+thiserror = "2"
+
+[dev-dependencies]

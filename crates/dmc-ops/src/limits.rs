@@ -113,6 +113,8 @@ impl RuntimeLimitPolicy {
             max_in_flight_requests: self.request.max_in_flight_requests,
             max_requests_per_connection: self.request.max_requests_per_connection,
             max_unlock_blob_size: self.protocol.max_unlock_blob_size,
+            max_runtime_id_len: dmc_protocol::DEFAULT_MAX_RUNTIME_ID_LEN,
+            max_ingest_payload: dmc_protocol::DEFAULT_MAX_INGEST_PAYLOAD,
         }
     }
 

@@ -1,0 +1,16 @@
+# Build context = AvroraCore (client comes via additional_contexts)
+.git
+.gitignore
+**/.DS_Store
+**/target
+**/node_modules
+data
+**/*.md
+!README.md
+docker-compose*.yml
+Makefile.docker
+.env
+.env.*
+*.pdb
+**/mutants.out*
+crates/dmc-core/ui/dist

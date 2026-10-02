@@ -10,8 +10,13 @@ dmc-observability = { path = "../dmc-observability" }
 dmc-materialized = { path = "../dmc-materialized" }
 dmc-model = { path = "../dmc-model" }
 dmc-protocol = { path = "../dmc-protocol" }
+dmc-runtime = { path = "../dmc-runtime" }
+dmc-catalog = { path = "../dmc-catalog" }
+dmc-ddl = { path = "../dmc-ddl" }
 dmc-security = { path = "../dmc-security" }
+dmc-sql-bind = { path = "../dmc-sql-bind" }
 dmc-sql-exec = { path = "../dmc-sql-exec" }
+dmc-sql-front = { path = "../dmc-sql-front" }
 dmc-vault = { path = "../dmc-vault" }
 aes-gcm = "0.10"
 rand = "0.8"

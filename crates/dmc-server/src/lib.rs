@@ -3,10 +3,13 @@
 mod audit_rec;
 mod backup_ops;
 mod bootstrap;
+mod catalog_ops;
 mod client;
 mod correlation;
 mod diagnostics;
 mod dispatch;
+mod ddl_ops;
+mod runtime_ops;
 mod health;
 mod metrics_rec;
 mod observe;
@@ -19,7 +22,8 @@ mod unlock_gate;
 mod vault_runtime;
 
 pub use bootstrap::{
-    bootstrap_core_state, bootstrap_core_state_locked, bootstrap_core_state_unlocked_for_test,
+    bootstrap_core_state, bootstrap_core_state_locked, bootstrap_core_state_locked_with_hub,
+    bootstrap_core_state_unlocked_for_test, bootstrap_core_state_unlocked_with_hub_for_test,
     dev_auth_service,
 };
 pub use client::{expect_ok_control, expect_ok_data, ProtocolClient};

@@ -1,0 +1,13 @@
+[package]
+name = "dmc-ddl"
+version.workspace = true
+edition.workspace = true
+description = "Typed schema mutation / DDL service (P7.3)"
+
+[dependencies]
+dmc-catalog = { path = "../dmc-catalog" }
+dmc-model = { path = "../dmc-model" }
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]

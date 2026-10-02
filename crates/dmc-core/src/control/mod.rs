@@ -4,6 +4,7 @@ pub mod backup_config;
 pub mod capability_rotation_config;
 mod commands;
 mod data;
+pub mod dev;
 mod devo_init;
 mod devices;
 mod handler;
@@ -26,10 +27,13 @@ pub use commands::{
     format_auth_init, format_devo_init, format_status, format_status_for, format_ui_auth_reset,
     format_ui_login_hint, run_init,
 };
+pub use dev::{
+    DEFAULT_UI_ACCESS_KEY, DEV_MASTER_FILE, DEV_UI_CREDENTIALS_FILE, MASTER_FILE, MASTER_KEY_HEX,
+    SQL_MASTER_KEY_HEX, UI_ACCESS_KEY, UI_CREDENTIALS_FILE, UI_TOTP_SECRET,
+};
 pub use devo_init::{
     clear_ui_auth, load_dev_master_hex, read_dev_ui_credentials, reset_ui_auth, resolve_ui_access_key,
-    run_auth_init, run_devo_init, DevoInitResult, UiAuthResetResult, DEV_MASTER_FILE,
-    DEV_UI_CREDENTIALS_FILE, DEFAULT_UI_ACCESS_KEY,
+    run_auth_init, run_devo_init, run_devo_init_ex, DevoInitResult, UiAuthResetResult,
 };
 pub use init::{InitResult, control_dir, init_control, init_control_for_host};
 pub use invite::{export_invite, write_invite_file};

@@ -166,6 +166,22 @@ pub enum Error {
     Invalid(String),
 }
 
+impl From<dmc_runtime::Error> for Error {
+    fn from(err: dmc_runtime::Error) -> Self {
+        match err {
+            dmc_runtime::Error::Vault(v) => Self::from_vault(v),
+            dmc_runtime::Error::UnknownStream(s) => Self::UnknownStream(s),
+            dmc_runtime::Error::UnknownChannel(s) => Self::UnknownChannel(s),
+            dmc_runtime::Error::UnknownTrigger(s) => Self::UnknownTrigger(s),
+            dmc_runtime::Error::NotInbound(s) => Self::NotInbound(s),
+            dmc_runtime::Error::OutsideScope(s) => Self::OutsideScope(s),
+            dmc_runtime::Error::ChannelExists(s) => Self::ChannelExists(s),
+            dmc_runtime::Error::StreamExists(s) => Self::StreamExists(s),
+            dmc_runtime::Error::Invalid(s) => Self::Invalid(s),
+        }
+    }
+}
+
 impl Error {
     pub fn from_vault(err: dmc_vault::Error) -> Self {
         match err {

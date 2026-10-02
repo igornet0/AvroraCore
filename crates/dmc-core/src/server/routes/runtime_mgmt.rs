@@ -4,15 +4,13 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::channel::ChannelSpec;
-use crate::event::EventKind;
 use crate::ids::{StreamId, SubsystemId, TriggerId};
 use crate::runtime::Runtime;
 use crate::server::error::ApiResult;
-use crate::stream::{StreamDirection, StreamSpec};
+use crate::stream::StreamSpec;
 use crate::subsystem::SubsystemSpec;
 use crate::trigger::{TriggerAction, TriggerDef};
-use dmc_vault::PermissionSet;
-use dmc_vault::key::KeyPath;
+use dmc_runtime::{parse_channel_kind, parse_event_kind, parse_key_path, parse_perms, parse_stream_direction};
 
 #[derive(Deserialize)]
 struct LimitQuery {
@@ -57,12 +55,7 @@ async fn create_channel(
     State(rt): State<Runtime>,
     Json(body): Json<ChannelBody>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let kind = match body.kind.to_ascii_lowercase().as_str() {
-        "internal" => crate::channel::ChannelKind::Internal,
-        "tcp" => crate::channel::ChannelKind::Tcp,
-        "http" => crate::channel::ChannelKind::Http,
-        other => return Err(crate::error::Error::Invalid(format!("unknown kind: {other}")).into()),
-    };
+    let kind = parse_channel_kind(&body.kind)?;
     let id = rt
         .configure_channel(ChannelSpec {
             id: body.id.into(),
@@ -110,26 +103,9 @@ async fn create_stream(
     State(rt): State<Runtime>,
     Json(body): Json<StreamBody>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let direction = match body.direction.to_ascii_lowercase().as_str() {
-        "inbound" => StreamDirection::Inbound,
-        "outbound" => StreamDirection::Outbound,
-        other => {
-            return Err(crate::error::Error::Invalid(format!("bad direction: {other}")).into());
-        }
-    };
-    let scope = {
-        let t = body.path_scope.trim().trim_matches('/');
-        if t.is_empty() {
-            KeyPath::root()
-        } else {
-            KeyPath::parse(t)?
-        }
-    };
-    let perms = if body.required_perms.is_empty() {
-        PermissionSet::read_write()
-    } else {
-        PermissionSet::from_names(&body.required_perms)?
-    };
+    let direction = parse_stream_direction(&body.direction)?;
+    let scope = parse_key_path(&body.path_scope)?;
+    let perms = parse_perms(&body.required_perms)?;
     let id = rt
         .create_stream(StreamSpec {
             id: StreamId::from(body.id),
@@ -194,23 +170,6 @@ async fn create_trigger(
     Ok(Json(
         serde_json::json!({ "ok": true, "id": id.to_string() }),
     ))
-}
-
-fn parse_event_kind(raw: &str) -> crate::error::Result<EventKind> {
-    Ok(match raw {
-        "DataPut" | "data_put" => EventKind::DataPut,
-        "DataDelete" | "data_delete" => EventKind::DataDelete,
-        "KeyRevoke" | "key_revoke" => EventKind::KeyRevoke,
-        "KeyRotate" | "key_rotate" => EventKind::KeyRotate,
-        "StreamMessage" | "stream_message" => EventKind::StreamMessage,
-        "OverlayApply" | "overlay_apply" => EventKind::OverlayApply,
-        "SubsystemTick" | "subsystem_tick" => EventKind::SubsystemTick,
-        other => {
-            return Err(crate::error::Error::Invalid(format!(
-                "unknown event: {other}"
-            )));
-        }
-    })
 }
 
 async fn list_events(

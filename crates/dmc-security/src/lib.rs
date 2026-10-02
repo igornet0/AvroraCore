@@ -23,6 +23,7 @@ pub mod authentication;
 pub mod authorization;
 pub mod capabilities;
 pub mod credentials;
+pub mod dev;
 mod crypto;
 pub mod error;
 pub mod identity;
@@ -40,9 +41,10 @@ pub use auth::{
     Resource, SessionManager, SessionState,
 };
 pub use authentication::{
-    dev_enroll_ui_auth, AuthManager, AuthStatus, DevUiCredentials, SetupBeginResponse,
-    DEV_DEFAULT_UI_ACCESS_KEY,
+    dev_enroll_ui_auth, dev_enroll_ui_auth_with_totp, AuthManager, AuthStatus, DevUiCredentials,
+    SetupBeginResponse,
 };
+pub use dev::{DEV_DEFAULT_UI_ACCESS_KEY, UI_ACCESS_KEY, UI_TOTP_SECRET};
 pub use authorization::{AccessControl, RotationReport, Session};
 pub use capabilities::{
     Capability, CapabilityId, CapabilityRef, CapabilitySet, CapabilityStatus, IssuedCapability,

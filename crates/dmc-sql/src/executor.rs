@@ -43,7 +43,14 @@ pub struct SqlEngine {
 
 impl SqlEngine {
     pub fn create(path: impl AsRef<Path>) -> Result<(Self, String)> {
-        let (mut storage, master) = StorageEngine::create(path)?;
+        Self::create_with_master(path, None)
+    }
+
+    pub fn create_with_master(
+        path: impl AsRef<Path>,
+        master_hex: Option<&str>,
+    ) -> Result<(Self, String)> {
+        let (mut storage, master) = StorageEngine::create_with_master(path, master_hex)?;
         let catalog = Catalog::open(&mut storage)?;
         Ok((Self { storage, catalog }, master))
     }

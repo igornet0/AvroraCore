@@ -3,13 +3,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use dmc_security::{dev_enroll_ui_auth, ui_auth_path, DevUiCredentials, DEV_DEFAULT_UI_ACCESS_KEY};
+use dmc_security::{dev_enroll_ui_auth_with_totp, ui_auth_path, DevUiCredentials};
 
+use super::dev::{DEV_DEFAULT_UI_ACCESS_KEY, DEV_MASTER_FILE, DEV_UI_CREDENTIALS_FILE};
 use crate::runtime::{DbStatus, Runtime};
-
-pub const DEV_MASTER_FILE: &str = ".avrora-dev-master.hex";
-pub const DEV_UI_CREDENTIALS_FILE: &str = ".avrora-dev-ui-credentials.txt";
-pub use dmc_security::DEV_DEFAULT_UI_ACCESS_KEY as DEFAULT_UI_ACCESS_KEY;
 
 pub fn resolve_ui_access_key(key: Option<&str>) -> Result<String, String> {
     let k = key
@@ -41,6 +38,26 @@ pub async fn run_devo_init(
     write_master_file: bool,
     ui_access_key: Option<&str>,
 ) -> Result<DevoInitResult, String> {
+    run_devo_init_ex(
+        rt,
+        with_demo,
+        master_hex,
+        write_master_file,
+        ui_access_key,
+        None,
+    )
+    .await
+}
+
+/// Like [`run_devo_init`], with optional fixed UI TOTP secret (docker / env.dev).
+pub async fn run_devo_init_ex(
+    rt: &Runtime,
+    with_demo: bool,
+    master_hex: Option<&str>,
+    write_master_file: bool,
+    ui_access_key: Option<&str>,
+    ui_totp_secret: Option<&str>,
+) -> Result<DevoInitResult, String> {
     let status = rt.status().await;
     let mut created_vault = false;
     let mut master_out = None::<String>;
@@ -49,7 +66,10 @@ pub async fn run_devo_init(
 
     match status {
         DbStatus::Empty => {
-            let (hex, db_id) = rt.create().await.map_err(|e| e.to_string())?;
+            let (hex, db_id) = rt
+                .create_with_master(master_hex)
+                .await
+                .map_err(|e| e.to_string())?;
             created_vault = true;
             master_out = Some(hex.clone());
             db_id_out = Some(db_id);
@@ -84,7 +104,9 @@ pub async fn run_devo_init(
 
     let access_key = resolve_ui_access_key(ui_access_key)?;
     let ui = if write_master_file {
-        provision_dev_ui_auth(rt, &access_key).await.ok()
+        provision_dev_ui_auth(rt, &access_key, ui_totp_secret)
+            .await
+            .ok()
     } else {
         None
     };
@@ -116,7 +138,10 @@ pub async fn run_auth_init(
 
     match status {
         DbStatus::Empty => {
-            let (hex, db_id) = rt.create().await.map_err(|e| e.to_string())?;
+            let (hex, db_id) = rt
+                .create_with_master(master_hex)
+                .await
+                .map_err(|e| e.to_string())?;
             created_vault = true;
             master_out = Some(hex.clone());
             db_id_out = Some(db_id);
@@ -150,7 +175,7 @@ pub async fn run_auth_init(
 
     let access_key = resolve_ui_access_key(ui_access_key)?;
     let ui = if write_master_file {
-        provision_dev_ui_auth(rt, &access_key).await.ok()
+        provision_dev_ui_auth(rt, &access_key, None).await.ok()
     } else {
         None
     };
@@ -203,7 +228,8 @@ pub fn reset_ui_auth(db_path: &Path, access_key: Option<&str>) -> Result<UiAuthR
     let removed = clear_ui_auth(db_path)?;
     let access_key = resolve_ui_access_key(access_key)?;
     let auth_path = ui_auth_path(db_path);
-    let creds = dev_enroll_ui_auth(&auth_path, &access_key).map_err(|e| e.to_string())?;
+    let creds = dev_enroll_ui_auth_with_totp(&auth_path, &access_key, None)
+        .map_err(|e| e.to_string())?;
     let cred_path = dev_ui_credentials_path(db_path);
     write_dev_ui_credentials_file(&cred_path, &creds)?;
     Ok(UiAuthResetResult {
@@ -215,13 +241,18 @@ pub fn reset_ui_auth(db_path: &Path, access_key: Option<&str>) -> Result<UiAuthR
     })
 }
 
-async fn provision_dev_ui_auth(rt: &Runtime, access_key: &str) -> Result<DevUiProvision, String> {
+async fn provision_dev_ui_auth(
+    rt: &Runtime,
+    access_key: &str,
+    totp_secret: Option<&str>,
+) -> Result<DevUiProvision, String> {
     let db_path = rt.db_path().await;
     let auth_path = ui_auth_path(&db_path);
     if auth_path.is_file() {
         return Err("UI auth already enrolled".into());
     }
-    let creds = dev_enroll_ui_auth(&auth_path, access_key).map_err(|e| e.to_string())?;
+    let creds = dev_enroll_ui_auth_with_totp(&auth_path, access_key, totp_secret)
+        .map_err(|e| e.to_string())?;
     let cred_path = dev_ui_credentials_path(&db_path);
     write_dev_ui_credentials_file(&cred_path, &creds)?;
     Ok(DevUiProvision {
