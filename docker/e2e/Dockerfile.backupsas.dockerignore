@@ -1,0 +1,5 @@
+# Applies to the ../BackupSAS build context of Dockerfile.backupsas only.
+target
+**/target
+.git
+**/.DS_Store

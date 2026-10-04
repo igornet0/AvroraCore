@@ -1,0 +1,33 @@
+# syntax=docker/dockerfile:1.7
+#
+# BackupSAS node image for the AvroraCore ↔ BackupSAS E2E stand.
+# Build context = ../BackupSAS (see docker/e2e/compose.yml).
+
+ARG RUST_VERSION=1.88
+
+FROM rust:${RUST_VERSION}-bookworm AS builder
+WORKDIR /src/BackupSAS
+COPY Cargo.toml Cargo.lock ./
+COPY crates crates
+COPY tests tests
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/BackupSAS/target \
+    cargo build --release -p backupsas-cli \
+ && cp target/release/backupsas /usr/local/bin/backupsas
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates tini \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /usr/local/bin/backupsas /usr/local/bin/backupsas
+# First boot: identity + TLS + config. Every boot: publish connect.json with
+# PUBLIC_ENDPOINT (the address other containers use), then serve.
+RUN printf '%s\n' '#!/bin/sh' 'set -eu' 'D=/data' \
+  'if [ ! -f "$D/server.toml" ]; then backupsas init --data-dir "$D" --listen 0.0.0.0:7420 >/dev/null; echo "initialized $D"; fi' \
+  'backupsas connect-info --data-dir "$D" --endpoint "${PUBLIC_ENDPOINT:?}" --out "$D/connect.json" >/dev/null' \
+  'echo "connect.json endpoint=${PUBLIC_ENDPOINT}"' \
+  'exec backupsas start --data-dir "$D"' > /usr/local/bin/bsas-entrypoint.sh \
+ && chmod +x /usr/local/bin/bsas-entrypoint.sh
+VOLUME ["/data"]
+EXPOSE 7420
+ENTRYPOINT ["tini", "--", "/usr/local/bin/bsas-entrypoint.sh"]
