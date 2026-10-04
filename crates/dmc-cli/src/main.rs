@@ -1,3 +1,4 @@
+mod encrypt;
 mod serve;
 mod session;
 mod shell;
@@ -42,12 +43,46 @@ enum Cmd {
         data_dir: PathBuf,
         #[arg(long)]
         socket: Option<PathBuf>,
-        /// Dev bootstrap: analyst/pw + users table + .dmc-dev-master.hex
+        /// Dev bootstrap: analyst/pw + users table + .dmc-dev-master.hex (requires AVRORA_DEV=1)
         #[arg(long)]
         dev: bool,
+        /// Production: wrap this run's unlock material into a KeyPass (Argon2id) in this
+        /// directory. Password from DMC_KEYPASS_PASSWORD or an interactive prompt.
+        /// Without it nothing is persisted and the vault stays Locked.
+        #[arg(long)]
+        keypass_dir: Option<PathBuf>,
         /// Co-host HTTP admin on this address (shared RuntimeHub with DMC IPC)
         #[arg(long)]
         http: Option<String>,
+    },
+    /// Explicit offline migration: seal a protected SQL column with its owners' keys
+    /// into a new store (`--target`). Source is kept unless --purge-source.
+    EncryptMigrate {
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        target: PathBuf,
+        /// `flat` (dev root: rows/, state_events.json) or `ops` (dmc serve layout)
+        #[arg(long, default_value = "ops")]
+        layout: String,
+        /// `schema.table` (schema defaults to public)
+        #[arg(long)]
+        table: String,
+        #[arg(long)]
+        column: String,
+        /// Column holding the owner's subject id
+        #[arg(long)]
+        owner_column: String,
+        /// Identity file (`AuthService::save_identities`)
+        #[arg(long)]
+        identities: PathBuf,
+        #[arg(long)]
+        keyring_dir: PathBuf,
+        /// Owner identity name; repeat for every owner present in the table
+        #[arg(long = "owner")]
+        owners: Vec<String>,
+        #[arg(long)]
+        purge_source: bool,
     },
     /// Интерактивный SQL shell
     Shell {
@@ -217,9 +252,36 @@ fn run() -> Result<(), String> {
             data_dir,
             socket,
             dev,
+            keypass_dir,
             http,
         } => {
             std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+            let sink = match (dev, keypass_dir) {
+                (true, None) => serve::UnlockSink::DevPlainFile,
+                (true, Some(_)) => {
+                    return Err("--dev cannot be combined with --keypass-dir".into());
+                }
+                (false, Some(dir)) => {
+                    let password = match std::env::var(serve::ENV_KEYPASS_PASSWORD) {
+                        Ok(p) if !p.is_empty() => p,
+                        _ => {
+                            let a = rpassword::prompt_password("New KeyPass password: ")
+                                .map_err(|e| e.to_string())?;
+                            let b = rpassword::prompt_password("Repeat KeyPass password: ")
+                                .map_err(|e| e.to_string())?;
+                            if a != b {
+                                return Err("KeyPass passwords do not match".into());
+                            }
+                            a
+                        }
+                    };
+                    serve::UnlockSink::KeyPass {
+                        dir,
+                        password: zeroize::Zeroizing::new(password),
+                    }
+                }
+                (false, None) => serve::UnlockSink::Discard,
+            };
             let socket = socket.unwrap_or_else(default_socket_path);
             let http_addr = match http {
                 Some(s) => Some(
@@ -228,7 +290,7 @@ fn run() -> Result<(), String> {
                 ),
                 None => None,
             };
-            let (_handle, outcome) = spawn_server(data_dir, socket, dev, http_addr, &view)?;
+            let (_handle, outcome) = spawn_server(data_dir, socket, dev, sink, http_addr, &view)?;
             println!("DMC Core listening on {}", outcome.socket.display());
             println!("data_root={}", outcome.data_root.display());
             if let Some(addr) = http_addr {
@@ -237,14 +299,39 @@ fn run() -> Result<(), String> {
             if outcome.dev_users {
                 println!("dev user: analyst / pw");
             }
-            if let Some(m) = &outcome.master_file {
-                println!("dev master file: {}", m.display());
+            match (&outcome.master_file, outcome.dev_users) {
+                (Some(m), true) => println!("dev master file: {}", m.display()),
+                (Some(m), false) => println!("unlock: dmc ... --unlock --keypass-dir {}", m.display()),
+                (None, _) => println!("vault Locked; no unlock material persisted (use --keypass-dir)"),
             }
             println!("Press Ctrl+C to stop.");
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(3600));
             }
         }
+        Cmd::EncryptMigrate {
+            source,
+            target,
+            layout,
+            table,
+            column,
+            owner_column,
+            identities,
+            keyring_dir,
+            owners,
+            purge_source,
+        } => encrypt::run(encrypt::EncryptMigrateArgs {
+            source,
+            target,
+            layout,
+            table,
+            column,
+            owner_column,
+            identities,
+            keyring_dir,
+            owners,
+            purge_source,
+        }),
         Cmd::Keys => {
             view::print_key_hierarchy_stdout();
             if view.is_enabled() {

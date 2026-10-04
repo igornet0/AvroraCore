@@ -14,12 +14,18 @@ dmc-client = { path = "../dmc-client" }
 dmc-core = { path = "../dmc-core" }
 dmc-ipc = { path = "../dmc-ipc" }
 dmc-ops = { path = "../dmc-ops" }
+dmc-security = { path = "../dmc-security" }
+dmc-materialized = { path = "../dmc-materialized" }
 dmc-protocol = { path = "../dmc-protocol" }
 dmc-runtime = { path = "../dmc-runtime" }
 dmc-server = { path = "../dmc-server" }
 dmc-vault = { path = "../dmc-vault" }
 hex = "0.4"
+zeroize = "1"
 rpassword = "7"
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[dev-dependencies]
+tempfile = "3"

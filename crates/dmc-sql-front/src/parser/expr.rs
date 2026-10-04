@@ -43,6 +43,15 @@ pub fn parse_sql_value(parser: &mut Parser<'_>) -> Result<SqlValue> {
             let text = parser.bump().text.clone();
             Ok(SqlValue::Text(text))
         }
+        TokenKind::Blob => {
+            let text = parser.bump().text.clone();
+            let bytes = (0..text.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&text[i..i + 2], 16))
+                .collect::<std::result::Result<Vec<u8>, _>>()
+                .map_err(|_| ParseError::syntax("invalid blob literal", span))?;
+            Ok(SqlValue::Blob(bytes))
+        }
         _ => Err(ParseError::syntax("expected literal value", span)),
     }
 }
@@ -246,6 +255,7 @@ fn parse_primary(parser: &mut Parser<'_>) -> Result<Expr> {
         TokenKind::Integer
         | TokenKind::Float
         | TokenKind::String
+        | TokenKind::Blob
         | TokenKind::Null
         | TokenKind::True
         | TokenKind::False => {

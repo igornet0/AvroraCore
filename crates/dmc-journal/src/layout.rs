@@ -73,6 +73,22 @@ impl StorageLayout {
         self.runtime_dir().join("snapshots")
     }
 
+    /// Cryptographic-ownership state (subject keyrings, identities). Lives under
+    /// `runtime/` so the `runtime` backup section carries it with the data.
+    pub fn ownership_dir(&self) -> PathBuf {
+        self.runtime_dir().join("ownership")
+    }
+
+    /// Wrapped subject keyrings (`dmc_vault::ownership::KeyringStore`).
+    pub fn keyring_dir(&self) -> PathBuf {
+        self.ownership_dir().join("keyring")
+    }
+
+    /// Identity directory + password verifiers (`AuthService::save_identities`).
+    pub fn identities_file(&self) -> PathBuf {
+        self.ownership_dir().join("identities.json")
+    }
+
     pub fn snapshot_manifest(&self) -> PathBuf {
         self.snapshots_dir().join("manifest.json")
     }

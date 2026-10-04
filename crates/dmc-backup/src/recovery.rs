@@ -248,6 +248,8 @@ fn prepare_live_tree(target: &Path, n: u64) -> Result<PathBuf> {
         let _ = STATE_EVENT_LOG_FORMAT_VERSION;
     }
 
+    crate::ownership::install_into_live(target, &stage)?;
+
     // Publish staged live → target/live atomically.
     let live = target.join(LIVE_DIR);
     if live.exists() {

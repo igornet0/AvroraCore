@@ -37,6 +37,8 @@ pub struct StateMaterializer<L: StateEventLog> {
     seen_event_ids: HashSet<[u8; 16]>,
     snapshot_path: Option<PathBuf>,
     statistics: StatisticsCatalog,
+    /// CLIENT_OWNED columns: values must be well-formed CLIENT-domain sealed records.
+    sealed_columns: Vec<crate::protect::SealedColumnRule>,
 }
 
 impl StateMaterializer<crate::event_log::MemoryStateEventLog> {
@@ -52,7 +54,8 @@ impl StateMaterializer<crate::event_log::MemoryStateEventLog> {
             index_stores: HashMap::new(),
             seen_event_ids: HashSet::new(),
             snapshot_path: None,
-            statistics: StatisticsCatalog::open(storage_root).unwrap_or_default(),
+            statistics: StatisticsCatalog::open(&storage_root).unwrap_or_default(),
+            sealed_columns: crate::protect::load_sealed_columns(&storage_root).unwrap_or_default(),
         }
     }
 }
@@ -76,6 +79,7 @@ impl StateMaterializer<crate::event_log::FileStateEventLog> {
             seen_event_ids: HashSet::new(),
             snapshot_path: Some(snapshot_path),
             statistics: StatisticsCatalog::open(&storage_root)?,
+            sealed_columns: crate::protect::load_sealed_columns(&storage_root)?,
         };
         if !mat.log.events().is_empty() {
             mat.replay_from_log()?;
@@ -122,6 +126,7 @@ impl StateMaterializer<crate::event_log::FileStateEventLog> {
             seen_event_ids: snapshot.seen_event_ids.into_iter().collect(),
             snapshot_path: Some(snapshot_path),
             statistics: StatisticsCatalog::open(&storage_root)?,
+            sealed_columns: crate::protect::load_sealed_columns(&storage_root)?,
         };
         mat.open_existing_table_stores()?;
         mat.open_existing_index_stores()?;
@@ -187,10 +192,37 @@ impl<L: StateEventLog> StateMaterializer<L> {
     }
 
     pub fn mutate(&mut self, event: StateEvent) -> Result<StateEventRecord> {
+        crate::protect::check_sealed_columns(&self.sealed_columns, &self.catalog, &event)?;
         let record = self.log.append(event)?;
         self.apply_record(&record, ApplyMode::Live)?;
         self.persist_snapshot_if_configured()?;
         Ok(record)
+    }
+
+    /// Declare a BLOB column CLIENT_OWNED (explicit, persisted, existing values must already
+    /// be NULL or CLIENT-domain sealed — nothing is reinterpreted or migrated silently).
+    pub fn declare_sealed_column(&mut self, rule: crate::protect::SealedColumnRule) -> Result<()> {
+        crate::protect::validate_declaration(&rule, &self.catalog)?;
+        if let Ok(store) = self.shared_table_store(dmc_model::TableId::new(rule.table_id)) {
+            let store = store.lock().expect("table store lock");
+            for row_id in store.live_row_ids() {
+                let values = store
+                    .get(row_id)
+                    .map_err(|e| Error::Corrupt(e.to_string()))?
+                    .ok_or_else(|| Error::Corrupt("live row vanished".into()))?;
+                let row: Vec<_> = values.iter().map(dmc_storage::stored_value_to_row).collect();
+                crate::protect::check_row(&rule, &self.catalog, &row)?;
+            }
+        }
+        if !self.sealed_columns.contains(&rule) {
+            self.sealed_columns.push(rule);
+            crate::protect::save_sealed_columns(&self.storage_root, &self.sealed_columns)?;
+        }
+        Ok(())
+    }
+
+    pub fn sealed_columns(&self) -> &[crate::protect::SealedColumnRule] {
+        &self.sealed_columns
     }
 
     pub fn mutate_catalog(&mut self, event: CatalogEvent) -> Result<StateEventRecord> {
@@ -722,6 +754,8 @@ pub fn rebuild_materialized_from_event_log(
         seen_event_ids: HashSet::new(),
         snapshot_path: None,
         statistics: StatisticsCatalog::open(storage_root).unwrap_or_default(),
+        // Replay of an existing log is never blocked by write-time policy.
+        sealed_columns: Vec::new(),
     };
     mat.replay_from_log()?;
     Ok((mat.catalog, mat.watermark))

@@ -546,6 +546,17 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "chacha20"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3613f74bd2eac03dad61bd53dbe620703d4371614fe0bc3b9f04dd36fe4e818"
+dependencies = [
+ "cfg-if",
+ "cipher",
+ "cpufeatures 0.2.17",
+]
+
+[[package]]
+name = "chacha20"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d524456ba66e72eb8b115ff89e01e497f8e6d11d78b70b1aa13c0fbd97540a81"
@@ -553,6 +564,19 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "chacha20poly1305"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10cd79432192d1c0f4e1a0fef9527696cc039165d729fb41b3f4f4f354c2dc35"
+dependencies = [
+ "aead",
+ "chacha20 0.9.1",
+ "cipher",
+ "poly1305",
+ "zeroize",
 ]
 
 [[package]]
@@ -601,6 +625,7 @@ checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
 dependencies = [
  "crypto-common 0.1.7",
  "inout",
+ "zeroize",
 ]
 
 [[package]]
@@ -980,15 +1005,17 @@ dependencies = [
 
 [[package]]
 name = "dmc-backup"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "dmc-materialized",
  "dmc-model",
+ "dmc-security",
  "dmc-sql-bind",
  "dmc-sql-exec",
  "dmc-sql-phys",
  "dmc-sql-plan",
  "dmc-storage",
+ "dmc-vault",
  "hex",
  "serde",
  "serde_json",
@@ -999,7 +1026,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-bench"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "avrora-client",
  "avrora-proto",
@@ -1031,7 +1058,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-catalog"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "dmc-model",
  "thiserror 2.0.20",
@@ -1039,32 +1066,37 @@ dependencies = [
 
 [[package]]
 name = "dmc-cli"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "clap",
  "dmc-client",
  "dmc-core",
  "dmc-ipc",
+ "dmc-materialized",
  "dmc-ops",
  "dmc-protocol",
  "dmc-runtime",
+ "dmc-security",
  "dmc-server",
  "dmc-vault",
  "hex",
  "rpassword",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]
 name = "dmc-client"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "dmc-ipc",
  "dmc-protocol",
  "dmc-remote",
  "dmc-server",
+ "dmc-vault",
  "rcgen 0.14.9",
  "tempfile",
  "thiserror 2.0.20",
@@ -1073,8 +1105,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "dmc-client-crypto"
+version = "0.0.3"
+dependencies = [
+ "dmc-vault",
+ "ed25519-dalek",
+ "hex",
+ "hkdf",
+ "hpke",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "zeroize",
+]
+
+[[package]]
 name = "dmc-core"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "aes-gcm",
  "avrora-client",
@@ -1088,6 +1138,7 @@ dependencies = [
  "ciborium",
  "clap",
  "dialoguer",
+ "dmc-client-crypto",
  "dmc-ipc",
  "dmc-journal",
  "dmc-protocol",
@@ -1118,7 +1169,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-ddl"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "dmc-catalog",
  "dmc-model",
@@ -1128,19 +1179,32 @@ dependencies = [
 
 [[package]]
 name = "dmc-integration-tests"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
+ "dmc-backup",
  "dmc-client",
+ "dmc-client-crypto",
  "dmc-ipc",
+ "dmc-materialized",
+ "dmc-observability",
  "dmc-protocol",
+ "dmc-runtime",
+ "dmc-security",
  "dmc-server",
+ "dmc-sql-exec",
+ "dmc-vault",
+ "ed25519-dalek",
  "hex",
+ "hkdf",
+ "hpke",
+ "serde_json",
+ "sha2 0.10.9",
  "tempfile",
 ]
 
 [[package]]
 name = "dmc-ipc"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "dmc-materialized",
  "dmc-model",
@@ -1154,7 +1218,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-journal"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "ciborium",
  "crc32c",
@@ -1170,20 +1234,23 @@ dependencies = [
 
 [[package]]
 name = "dmc-materialized"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "dmc-journal",
  "dmc-model",
+ "dmc-security",
  "dmc-storage",
+ "dmc-vault",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
+ "zeroize",
 ]
 
 [[package]]
 name = "dmc-model"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -1193,7 +1260,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-observability"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -1202,7 +1269,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-ops"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "dmc-backup",
  "dmc-materialized",
@@ -1225,18 +1292,20 @@ dependencies = [
 
 [[package]]
 name = "dmc-pgwire"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "dmc-core",
  "dmc-sql",
+ "dmc-vault",
  "tempfile",
  "tokio",
 ]
 
 [[package]]
 name = "dmc-protocol"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
+ "dmc-vault",
  "postcard",
  "serde",
  "thiserror 2.0.20",
@@ -1244,7 +1313,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-remote"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "dmc-observability",
  "dmc-protocol",
@@ -1260,7 +1329,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-runtime"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "chrono",
  "dmc-vault",
@@ -1273,24 +1342,27 @@ dependencies = [
 
 [[package]]
 name = "dmc-security"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "dmc-vault",
+ "ed25519-dalek",
  "hex",
  "rand 0.10.2",
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "subtle",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "totp-rs",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
 name = "dmc-server"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "aes-gcm",
  "dmc-backup",
@@ -1307,6 +1379,7 @@ dependencies = [
  "dmc-sql-exec",
  "dmc-sql-front",
  "dmc-vault",
+ "hex",
  "rand 0.8.7",
  "serde",
  "serde_json",
@@ -1318,7 +1391,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-sql"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "chrono",
  "dmc-storage",
@@ -1333,7 +1406,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-sql-bind"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "dmc-model",
  "dmc-sql-front",
@@ -1342,7 +1415,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-sql-exec"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "dmc-materialized",
  "dmc-model",
@@ -1358,7 +1431,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-sql-front"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "dmc-model",
  "thiserror 2.0.20",
@@ -1366,7 +1439,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-sql-phys"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "dmc-model",
  "dmc-sql-bind",
@@ -1377,7 +1450,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-sql-plan"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "dmc-model",
  "dmc-sql-bind",
@@ -1387,7 +1460,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-storage"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "crc32fast",
  "dmc-model",
@@ -1401,7 +1474,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-tauri"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "dmc-client",
  "dmc-ipc",
@@ -1421,7 +1494,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-vault"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -1429,10 +1502,13 @@ dependencies = [
  "chrono",
  "hex",
  "hkdf",
+ "hmac 0.12.1",
  "rand 0.8.7",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "subtle",
+ "tempfile",
  "thiserror 2.0.20",
  "uuid",
  "zeroize",
@@ -1777,6 +1853,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
 dependencies = [
  "digest 0.11.3",
+]
+
+[[package]]
+name = "hpke"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4917627a14198c3603282c5158b815ad5534795451d3c074b53cf3cee0960b11"
+dependencies = [
+ "aead",
+ "aes-gcm",
+ "chacha20poly1305",
+ "digest 0.10.7",
+ "generic-array",
+ "hkdf",
+ "hmac 0.12.1",
+ "rand_core 0.6.4",
+ "sha2 0.10.9",
+ "subtle",
+ "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
@@ -2447,6 +2543,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "poly1305"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8159bd90725d2df49889a078b54f4f79e87f1f8a8444194cdca81d38f5393abf"
+dependencies = [
+ "cpufeatures 0.2.17",
+ "opaque-debug",
+ "universal-hash",
+]
+
+[[package]]
 name = "polyval"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2614,7 +2721,7 @@ version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
 dependencies = [
- "chacha20",
+ "chacha20 0.10.1",
  "getrandom 0.4.3",
  "rand_core 0.10.1",
 ]
@@ -3939,6 +4046,16 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
+
+[[package]]
+name = "x25519-dalek"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7e468321c81fb07fa7f4c636c3972b9100f0346e5b6a9f2bd0603a52f7ed277"
+dependencies = [
+ "curve25519-dalek",
+ "rand_core 0.6.4",
+]
 
 [[package]]
 name = "x509-parser"

@@ -451,16 +451,6 @@ impl KeyTree {
         !self.keks.is_empty() || !self.deks.is_empty()
     }
 
-    pub fn install_kek(&mut self, path: &KeyPath, kek: KeyMaterial) {
-        self.keks.insert(path.as_str().to_string(), kek);
-    }
-
-    pub fn export_kek(&self, path: &KeyPath) -> Result<&KeyMaterial> {
-        self.keks
-            .get(path.as_str())
-            .ok_or_else(|| Error::UnknownNode(path.to_string()))
-    }
-
     pub fn peek_dek(&self, path: &KeyPath) -> Result<&KeyMaterial> {
         self.deks
             .get(path.as_str())

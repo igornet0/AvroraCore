@@ -27,6 +27,7 @@ pub mod dev;
 mod crypto;
 pub mod error;
 pub mod identity;
+pub mod ownership;
 pub mod policy;
 pub mod roles;
 mod sessions;

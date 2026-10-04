@@ -328,6 +328,97 @@ pub enum ControlRequest {
         table: String,
         name: String,
     },
+    // ── CLIENT_OWNED key management (appended: postcard variant indices stay stable) ──
+    //
+    // Every field is public or already wrapped: public keys, HPKE envelopes, subject ids.
+    // There is no message that carries a private key, root, recovery code or plaintext DEK.
+    /// Register the caller's first (version 1) public KEM key.
+    ClientKeyRegister {
+        session_id: String,
+        key: dmc_vault::ownership::ClientPublicKey,
+    },
+    /// Fetch all key versions of a subject (caller recomputes fingerprints; TOFU).
+    ClientKeyGet {
+        session_id: String,
+        subject: dmc_vault::ownership::SubjectId,
+    },
+    /// Register the caller's next key bundle version; previous becomes RETIRED. `proof`
+    /// carries the new auth key's possession signature and the old auth key's continuity
+    /// signature (`dmc_vault::ownership::auth::rotation_statement`).
+    ClientKeyRotate {
+        session_id: String,
+        key: dmc_vault::ownership::ClientPublicKey,
+        proof: dmc_vault::ownership::auth::KeyRotationProof,
+    },
+    /// Store an HPKE envelope created by its owner.
+    KeyEnvelopePut {
+        session_id: String,
+        envelope: dmc_vault::ownership::ClientKeyEnvelope,
+    },
+    /// Envelopes addressed to the caller (own + live delegations).
+    KeyEnvelopeGet {
+        session_id: String,
+    },
+    GrantCreate {
+        session_id: String,
+        grantee: dmc_vault::ownership::SubjectId,
+        #[serde(default)]
+        expires_at_ms: Option<u64>,
+    },
+    GrantList {
+        session_id: String,
+    },
+    GrantRevoke {
+        session_id: String,
+        grantee: dmc_vault::ownership::SubjectId,
+    },
+    /// Declare a BLOB column CLIENT_OWNED: the server then rejects any value that is not a
+    /// well-formed CLIENT-domain sealed record (no decryption involved).
+    SealedColumnDeclare {
+        session_id: String,
+        schema: String,
+        table: String,
+        column: String,
+        #[serde(default)]
+        owner_column: Option<String>,
+    },
+    /// Operator (grant CREATE on system) issues a one-time enrollment invite. The server
+    /// assigns the subject; the token is returned once.
+    IdentityInviteCreate {
+        session_id: String,
+        name: String,
+        tenant: dmc_vault::ownership::TenantId,
+        ttl_ms: u64,
+    },
+    /// Client claims an invite: registers its key bundle (X25519 + Ed25519) and proves
+    /// possession of the Ed25519 key. No session needed; no private key on the wire.
+    IdentityEnroll {
+        invite_id: String,
+        token: Vec<u8>,
+        key: dmc_vault::ownership::ClientPublicKey,
+        signature: Vec<u8>,
+    },
+    /// CLIENT_OWNED authentication, step 1: ask for a challenge bound to this connection.
+    ClientAuthBegin {
+        subject: dmc_vault::ownership::SubjectId,
+        tenant: dmc_vault::ownership::TenantId,
+    },
+    /// Step 2: Ed25519 signature over the challenge; `nonce` identifies it.
+    ClientAuthFinish {
+        nonce: Vec<u8>,
+        signature: Vec<u8>,
+    },
+}
+
+/// Delegation grant as seen on the wire.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientGrantWire {
+    pub owner: dmc_vault::ownership::SubjectId,
+    pub grantee: dmc_vault::ownership::SubjectId,
+    pub tenant: dmc_vault::ownership::TenantId,
+    pub granted_at_ms: u64,
+    #[serde(default)]
+    pub expires_at_ms: Option<u64>,
 }
 
 fn default_event_limit() -> u32 {
@@ -513,6 +604,49 @@ pub enum ControlResponse {
     },
     SchemaMutation(crate::runtime::SchemaMutationResultWire),
     RuntimeOk,
+    // ── CLIENT_OWNED key management (appended) ──
+    ClientKeyAck {
+        key_id: String,
+        key_version: u32,
+    },
+    ClientKeys {
+        keys: Vec<dmc_vault::ownership::ServerStoredPublicKey>,
+    },
+    KeyEnvelopeAck,
+    KeyEnvelopes {
+        envelopes: Vec<dmc_vault::ownership::ClientKeyEnvelope>,
+    },
+    Grants {
+        grants: Vec<ClientGrantWire>,
+    },
+    GrantAck {
+        changed: bool,
+    },
+    SealedColumnAck,
+    /// Invite issued: `token` is shown to the operator once (not stored by the server).
+    IdentityInvite {
+        invite_id: String,
+        token: Vec<u8>,
+        name: String,
+        tenant: dmc_vault::ownership::TenantId,
+        subject: dmc_vault::ownership::SubjectId,
+        expires_at_ms: u64,
+    },
+    IdentityEnrolled {
+        identity_id: String,
+        subject: dmc_vault::ownership::SubjectId,
+        key_id: String,
+    },
+    /// Challenge bytes (`dmc_vault::ownership::auth::Challenge`) to be signed.
+    ClientAuthChallenge {
+        challenge: Vec<u8>,
+    },
+    /// Session bound to this connection; carries no key material.
+    ClientAuthOk {
+        session_id: String,
+        expires_at_ms: u64,
+        key_version: u32,
+    },
 }
 
 /// Opaque backup listing DTO for Control Plane / Tauri (no filesystem paths).

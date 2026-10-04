@@ -90,6 +90,9 @@ impl<'a> Lexer<'a> {
             '\'' => return self.scan_string(start),
             '"' => return self.scan_quoted_identifier(start),
             c if c.is_ascii_digit() => return self.scan_number(start, false),
+            'x' | 'X' if self.peek_char().map(|(_, ch)| ch) == Some('\'') => {
+                return self.scan_blob(start);
+            }
             c if is_ident_start(c) => return self.scan_identifier_or_keyword(start, c),
             c => {
                 return Err(LexError::UnexpectedChar {
@@ -104,6 +107,31 @@ impl<'a> Lexer<'a> {
             SourceSpan::new(start, end),
             &self.input[start..end],
         ))
+    }
+
+    /// `X'0A1b…'` — standard SQL binary string literal (hex digits, even length).
+    fn scan_blob(&mut self, start: usize) -> LexResult<Token> {
+        self.next_char(); // opening quote
+        let body_start = start + 2;
+        while let Some((idx, ch)) = self.peek_char() {
+            self.next_char();
+            if ch == '\'' {
+                let hex = &self.input[body_start..idx];
+                if hex.len() % 2 != 0 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(LexError::InvalidBlob {
+                        span: SourceSpan::new(start, idx + 1),
+                    });
+                }
+                return Ok(Token::new(
+                    TokenKind::Blob,
+                    SourceSpan::new(start, idx + 1),
+                    hex,
+                ));
+            }
+        }
+        Err(LexError::UnterminatedString {
+            span: SourceSpan::new(start, self.input.len()),
+        })
     }
 
     fn scan_string(&mut self, start: usize) -> LexResult<Token> {
@@ -378,5 +406,24 @@ mod tests {
         let tokens = lex("SELECT").unwrap();
         assert_eq!(tokens[0].kind, TokenKind::Select);
         assert_eq!(tokens[0].span, SourceSpan::new(0, 6));
+    }
+}
+
+#[cfg(test)]
+mod blob_literal_tests {
+    use super::*;
+    use crate::token::TokenKind;
+
+    #[test]
+    fn hex_blob_literal() {
+        let toks = lex("SELECT X'0aFF', x'' , xyz").unwrap();
+        let blobs: Vec<_> = toks.iter().filter(|t| t.kind == TokenKind::Blob).collect();
+        assert_eq!(blobs.len(), 2);
+        assert_eq!(blobs[0].text, "0aFF");
+        assert_eq!(blobs[1].text, "");
+        assert!(toks.iter().any(|t| t.kind == TokenKind::Identifier && t.text == "xyz"));
+        assert!(lex("X'0'").is_err());
+        assert!(lex("X'zz'").is_err());
+        assert!(lex("X'00").is_err());
     }
 }

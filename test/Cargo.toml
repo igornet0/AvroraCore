@@ -15,3 +15,20 @@ dmc-protocol = { path = "../crates/dmc-protocol" }
 dmc-server = { path = "../crates/dmc-server" }
 tempfile = "3"
 hex = "0.4"
+
+[dev-dependencies]
+dmc-client-crypto = { path = "../crates/dmc-client-crypto" }
+dmc-http-co = { path = "../crates/dmc-http-co" }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+dmc-observability = { path = "../crates/dmc-observability" }
+dmc-security = { path = "../crates/dmc-security" }
+dmc-vault = { path = "../crates/dmc-vault" }
+dmc-backup = { path = "../crates/dmc-backup" }
+dmc-materialized = { path = "../crates/dmc-materialized" }
+dmc-runtime = { path = "../crates/dmc-runtime" }
+dmc-sql-exec = { path = "../crates/dmc-sql-exec" }
+ed25519-dalek = "2"
+serde_json = "1"
+hkdf = "0.12"
+hpke = { version = "0.12", default-features = false, features = ["x25519", "alloc"] }
+sha2 = "0.10"

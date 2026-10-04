@@ -23,3 +23,5 @@ dmc-sql-exec = { path = "../dmc-sql-exec" }
 dmc-sql-bind = { path = "../dmc-sql-bind" }
 dmc-sql-plan = { path = "../dmc-sql-plan" }
 dmc-sql-phys = { path = "../dmc-sql-phys" }
+dmc-security = { path = "../dmc-security" }
+dmc-vault = { path = "../dmc-vault" }

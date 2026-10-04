@@ -4,6 +4,7 @@
 //! SQL integration uses [`AuthService`] + [`CatalogAuthorizer`] before parse/bind/execute.
 
 mod authorizer;
+pub mod client_auth;
 mod credential;
 mod grant;
 mod identity;
@@ -17,7 +18,7 @@ pub use credential::{
     AuthenticatedIdentity, Credential, CredentialVerifier, PasswordCredentialVerifier,
 };
 pub use grant::GrantStore;
-pub use identity::{Identity, IdentityDirectory, IdentityId, IdentityStatus};
+pub use identity::{Identity, IdentityDirectory, IdentityId, IdentityStatus, KeyCustody};
 pub use principal::AuthPrincipal;
 pub use resource::{Action, Resource};
 pub use service::AuthService;

@@ -137,4 +137,7 @@ pub enum BackupFileRole {
     CatalogPlaceholder,
     StoragePlaceholder,
     MetadataPlaceholder,
+    /// CLIENT_OWNED key directory (public keys, HPKE envelopes, grants) and sealed-column
+    /// rules. Public / wrapped material only — no private keys, roots or plaintext DEKs.
+    Ownership,
 }

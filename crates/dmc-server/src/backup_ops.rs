@@ -127,11 +127,14 @@ pub fn backup_create(
         );
     }
     let root = backups_root(state);
-    let req = BackupRequest::new("avrora").with_options(BackupOptions {
-        include_rowstore,
-        include_statistics: false,
-        include_index_store: false,
-    });
+    let req = BackupRequest::new("avrora")
+        .with_options(BackupOptions {
+            include_rowstore,
+            include_statistics: false,
+            include_index_store: false,
+        })
+        // CLIENT_OWNED key directory travels with the data (public / wrapped only).
+        .with_ownership_dir(state.data_root.join("ownership"));
 
     let published = match state.ctx.journal() {
         Some(JournalBackend::File(mat)) => {

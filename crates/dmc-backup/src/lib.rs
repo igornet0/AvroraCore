@@ -12,6 +12,7 @@ mod coordinator;
 mod digest;
 mod error;
 mod manifest;
+mod ownership;
 mod list;
 mod publish;
 mod recovery;

@@ -183,6 +183,13 @@ fn copy_artifact_tree(src: &Path, dst: &Path) -> Result<()> {
         }
         copy_dir_all(&from, &dst.join(sub))?;
     }
+    // Optional CLIENT_OWNED key directory component (public / wrapped material only).
+    if src.join(crate::ownership::OWNERSHIP_DIR).is_dir() {
+        copy_dir_all(
+            &src.join(crate::ownership::OWNERSHIP_DIR),
+            &dst.join(crate::ownership::OWNERSHIP_DIR),
+        )?;
+    }
 
     // Explicitly refuse known secret / session paths if somehow present in artifact.
     for forbidden in [

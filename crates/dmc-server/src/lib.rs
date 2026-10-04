@@ -13,6 +13,7 @@ mod runtime_ops;
 mod health;
 mod metrics_rec;
 mod observe;
+mod ownership_ops;
 mod serve;
 mod session_gate;
 mod state;
@@ -31,7 +32,7 @@ pub use correlation::allocate_connection_id;
 pub use diagnostics::{diagnostics_to_wire, evaluate_diagnostics};
 pub use dispatch::{handle_control, handle_data, map_security_to_protocol};
 pub use health::{evaluate_health, evaluate_readiness, liveness};
-pub use serve::{serve_connection, ConnectionLimits, ServeOptions};
+pub use serve::{serve_connection, serve_connection_shared, ConnectionLimits, ServeOptions, SharedState, StateAccess};
 pub use state::{CoreLifecycle, CoreServerState, OperationalState};
 pub use unlock_blob::{open_unlock_blob, seal_unlock_blob, UnlockMaterial};
 pub use unlock_client::{

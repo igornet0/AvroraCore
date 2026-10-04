@@ -5,6 +5,7 @@ edition.workspace = true
 description = "Phase 7 — transport-independent Core protocol dispatch"
 
 [dependencies]
+hex = "0.4"
 dmc-backup = { path = "../dmc-backup" }
 dmc-observability = { path = "../dmc-observability" }
 dmc-materialized = { path = "../dmc-materialized" }

@@ -11,7 +11,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use axum::Router;
-use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 
 use crate::channel::ChannelSpec;
@@ -87,12 +86,9 @@ pub async fn run_with_runtime(
 
     let api = routes::router(state);
 
-    let mut app = Router::new().nest("/api", api).layer(
-        CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods(Any)
-            .allow_headers(Any),
-    );
+    // No CORS layer (D3): the UI is served from this origin (and the Vite dev server
+    // proxies `/api` same-origin), so no cross-origin page may call the management API.
+    let mut app = Router::new().nest("/api", api);
 
     if let Some(dist) = ui_dist {
         if dist.is_dir() {
@@ -113,6 +109,12 @@ pub async fn run_with_runtime(
 /// Disable with `AVRORA_DMC_IPC=0`. Socket defaults to [`default_socket_path`],
 /// override with `AVRORA_DMC_SOCKET`.
 fn spawn_dmc_ipc_adapter(paths: &control::AvroraPaths, hub: dmc_runtime::RuntimeHub) {
+    // The co-hosted SQL core is bootstrapped with demo credentials (analyst/pw) and a
+    // plaintext unlock file: dev only. Production runs `dmc serve` explicitly instead.
+    if !control::dev::dev_mode_enabled() {
+        println!("DMC IPC co-host disabled (dev-only; set AVRORA_DEV=1 or run `dmc serve`)");
+        return;
+    }
     if std::env::var("AVRORA_DMC_IPC")
         .map(|v| matches!(v.as_str(), "0" | "false" | "off" | "no"))
         .unwrap_or(false)
@@ -178,20 +180,10 @@ fn spawn_dmc_ipc_adapter(paths: &control::AvroraPaths, hub: dmc_runtime::Runtime
     }
 }
 
+/// Dev only (caller is gated by `dev_mode_enabled`): 0600 from creation.
 fn write_master_hex(path: &Path, material: &UnlockMaterial) -> Result<(), String> {
-    std::fs::create_dir_all(
-        path.parent()
-            .ok_or_else(|| "master path has no parent".to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-    std::fs::write(path, hex::encode(material.0)).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    let hex = zeroize::Zeroizing::new(hex::encode(material.0));
+    dmc_vault::secure_fs::write_secret_file(path, hex.as_bytes()).map_err(|e| e.to_string())
 }
 
 fn try_dev_unlock(rt: &Runtime, db_path: &Path) {
@@ -199,6 +191,17 @@ fn try_dev_unlock(rt: &Runtime, db_path: &Path) {
         return;
     };
     let master_path = parent.join(DEV_MASTER_FILE);
+    // A Master Key stored in plaintext is a dev convenience only. Without explicit
+    // AVRORA_DEV=1 the file is ignored and the vault stays Locked (fail closed).
+    if !control::dev::dev_mode_enabled() {
+        if master_path.is_file() {
+            eprintln!(
+                "ignoring {} (set AVRORA_DEV=1 for dev auto-unlock); vault stays locked",
+                master_path.display()
+            );
+        }
+        return;
+    }
     let Ok(raw) = std::fs::read_to_string(&master_path) else {
         return;
     };

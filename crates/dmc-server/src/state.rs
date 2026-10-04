@@ -67,6 +67,11 @@ impl ReplayGuard {
     }
 }
 
+/// Relative location of the CLIENT_OWNED key directory under the data root.
+pub const CLIENT_KEYS_DIR: &str = "ownership/client";
+/// Identity directory file (relative to the data root).
+pub const IDENTITIES_FILE: &str = "ownership/identities.json";
+
 pub struct CoreServerState {
     pub auth: AuthService,
     pub ctx: ExecutionContext,
@@ -93,6 +98,10 @@ pub struct CoreServerState {
     in_flight_requests: u32,
     /// Active accepted connections (7.10.7 admission).
     active_connections: u32,
+    /// CLIENT_OWNED key directory (public keys, HPKE envelopes, grants). Opened lazily
+    /// under `data_root/ownership/client`. Holds no private key material.
+    client_keys: Option<dmc_security::ownership::ClientKeyDirectory>,
+    invites: Option<dmc_security::ownership::InviteStore>,
 }
 
 impl CoreServerState {
@@ -135,6 +144,8 @@ impl CoreServerState {
                 session_gates: SessionGateStore::new(),
                 in_flight_requests: 0,
                 active_connections: 0,
+                client_keys: None,
+                invites: None,
             },
             master,
         ))
@@ -172,6 +183,58 @@ impl CoreServerState {
     /// Replace audit sink (tests / failure isolation). Does not affect security state.
     pub fn set_audit(&mut self, audit: Audit) {
         self.audit = audit;
+    }
+
+    /// Directory for CLIENT_OWNED public keys / envelopes / grants.
+    pub fn client_key_dir(
+        &mut self,
+    ) -> std::result::Result<&mut dmc_security::ownership::ClientKeyDirectory, dmc_security::Error> {
+        if self.client_keys.is_none() {
+            let dir = dmc_security::ownership::ClientKeyDirectory::open(
+                self.data_root.join(CLIENT_KEYS_DIR),
+            )?;
+            self.client_keys = Some(dir);
+        }
+        Ok(self.client_keys.as_mut().expect("opened above"))
+    }
+
+    /// Auth, key directory and invite store, all mutable (enrollment touches all three).
+    pub fn ownership_parts(
+        &mut self,
+    ) -> std::result::Result<
+        (
+            &mut AuthService,
+            &mut dmc_security::ownership::ClientKeyDirectory,
+            &mut dmc_security::ownership::InviteStore,
+        ),
+        dmc_security::Error,
+    > {
+        self.client_key_dir()?;
+        if self.invites.is_none() {
+            self.invites = Some(dmc_security::ownership::InviteStore::open(
+                self.data_root.join(CLIENT_KEYS_DIR),
+            )?);
+        }
+        Ok((
+            &mut self.auth,
+            self.client_keys.as_mut().expect("opened above"),
+            self.invites.as_mut().expect("opened above"),
+        ))
+    }
+
+    /// Persist the identity directory (hashed credentials, custody, subject ids) next to
+    /// the key directory, so it survives restarts and travels in the backup's
+    /// `ownership` component.
+    pub fn persist_identities(&self) -> std::result::Result<(), dmc_security::Error> {
+        self.auth.save_identities(&self.data_root.join(IDENTITIES_FILE))
+    }
+
+    /// Auth (read) + key directory (write) without cloning the identity directory.
+    pub fn auth_and_client_key_dir(
+        &mut self,
+    ) -> std::result::Result<(&AuthService, &mut dmc_security::ownership::ClientKeyDirectory), dmc_security::Error> {
+        self.client_key_dir()?;
+        Ok((&self.auth, self.client_keys.as_mut().expect("opened above")))
     }
 
     pub fn auth_mut(&mut self) -> &mut AuthService {

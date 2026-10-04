@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use dmc_vault::ownership::{SubjectId, TenantId};
 use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
@@ -37,6 +38,29 @@ pub struct Identity {
     pub id: IdentityId,
     pub name: String,
     pub status: IdentityStatus,
+    /// Opaque data-subject id (random, not derived from `id`/`name`). Present only for
+    /// identities enrolled for cryptographic data ownership.
+    #[serde(default)]
+    pub subject_id: Option<SubjectId>,
+    /// Isolation domain of the subject's keys and records.
+    #[serde(default)]
+    pub tenant: Option<TenantId>,
+    /// Who holds the subject's cryptographic authority.
+    #[serde(default)]
+    pub custody: KeyCustody,
+}
+
+/// SERVER_OWNED vs CLIENT_OWNED. The two hierarchies never mix: a client-custody subject
+/// has no server keyring, and `KeyManager` refuses to unwrap anything for it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyCustody {
+    /// Keys unwrapped inside AvroraCore by `KeyManager` (password-wrapped keyring).
+    #[default]
+    Server,
+    /// Keys exist only on the client device; AvroraCore stores public keys, HPKE
+    /// envelopes and ciphertext.
+    Client,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,6 +111,12 @@ impl IdentityDirectory {
 
     pub fn list(&self) -> Vec<&Identity> {
         self.by_id.values().collect()
+    }
+
+    pub fn get_by_subject(&self, subject: SubjectId) -> Option<&Identity> {
+        self.by_id
+            .values()
+            .find(|i| i.subject_id == Some(subject))
     }
 
     pub fn disable(&mut self, id: &IdentityId) -> Result<()> {

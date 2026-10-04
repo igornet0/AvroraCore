@@ -299,6 +299,196 @@ impl ControlClient<'_> {
         }
     }
 
+    // ── CLIENT_OWNED enrollment + authentication (D1/D2) ─────────────────────
+
+    /// Operator: issue a one-time invite (needs CREATE on system). The returned token
+    /// must reach the user out of band; it is not stored by the server.
+    pub fn identity_invite_create(
+        &mut self,
+        name: &str,
+        tenant: dmc_vault::ownership::TenantId,
+        ttl_ms: u64,
+    ) -> Result<IssuedInviteWire> {
+        let session_id = self.client.session.require_session()?.to_string();
+        match expect_ok_control(self.control(ControlRequest::IdentityInviteCreate {
+            session_id,
+            name: name.into(),
+            tenant,
+            ttl_ms,
+        })?)? {
+            ControlResponse::IdentityInvite {
+                invite_id,
+                token,
+                name,
+                tenant,
+                subject,
+                expires_at_ms,
+            } => Ok(IssuedInviteWire {
+                invite_id,
+                token,
+                name,
+                tenant,
+                subject,
+                expires_at_ms,
+            }),
+            _ => Err(ClientError::UnexpectedControl),
+        }
+    }
+
+    /// Client: claim an invite with a key bundle and the Ed25519 proof of possession.
+    pub fn identity_enroll(
+        &mut self,
+        invite_id: &str,
+        token: &[u8],
+        key: dmc_vault::ownership::ClientPublicKey,
+        signature: Vec<u8>,
+    ) -> Result<(String, dmc_vault::ownership::SubjectId)> {
+        match expect_ok_control(self.control(ControlRequest::IdentityEnroll {
+            invite_id: invite_id.into(),
+            token: token.to_vec(),
+            key,
+            signature,
+        })?)? {
+            ControlResponse::IdentityEnrolled { identity_id, subject, .. } => Ok((identity_id, subject)),
+            _ => Err(ClientError::UnexpectedControl),
+        }
+    }
+
+    /// CLIENT_OWNED authentication: request a challenge, let `sign` (the device key holder,
+    /// e.g. `dmc_client_crypto::ClientIdentity::sign_challenge`) sign it, and finish.
+    /// The resulting session is bound to this connection. No secret crosses the wire.
+    pub fn client_authenticate<E: std::fmt::Display>(
+        &mut self,
+        subject: dmc_vault::ownership::SubjectId,
+        tenant: dmc_vault::ownership::TenantId,
+        sign: impl FnOnce(&[u8]) -> std::result::Result<Vec<u8>, E>,
+    ) -> Result<String> {
+        let challenge = match expect_ok_control(self.control(ControlRequest::ClientAuthBegin { subject, tenant })?)? {
+            ControlResponse::ClientAuthChallenge { challenge } => challenge,
+            _ => return Err(ClientError::UnexpectedControl),
+        };
+        let parsed = dmc_vault::ownership::auth::Challenge::parse(&challenge)
+            .map_err(|e| ClientError::Message(e.to_string()))?;
+        let signature = sign(&challenge).map_err(|e| ClientError::Message(e.to_string()))?;
+        match expect_ok_control(self.control(ControlRequest::ClientAuthFinish {
+            nonce: parsed.nonce.to_vec(),
+            signature,
+        })?)? {
+            ControlResponse::ClientAuthOk { session_id, .. } => {
+                self.client.session.session_id = Some(session_id.clone());
+                self.client.session.identity_id = None;
+                self.client.session.unlock_binding_key = None;
+                self.client.session.phase = ConnectionPhase::Authenticated;
+                self.client.session.vault = None;
+                Ok(session_id)
+            }
+            _ => Err(ClientError::UnexpectedControl),
+        }
+    }
+
+    // ── CLIENT_OWNED key management (public / wrapped material only) ──────────
+
+    pub fn client_key_register(&mut self, key: dmc_vault::ownership::ClientPublicKey) -> Result<(String, u32)> {
+        let session_id = self.client.session.require_session()?.to_string();
+        match expect_ok_control(self.control(ControlRequest::ClientKeyRegister { session_id, key })?)? {
+            ControlResponse::ClientKeyAck { key_id, key_version } => Ok((key_id, key_version)),
+            _ => Err(ClientError::UnexpectedControl),
+        }
+    }
+
+    pub fn client_key_rotate(
+        &mut self,
+        key: dmc_vault::ownership::ClientPublicKey,
+        proof: dmc_vault::ownership::auth::KeyRotationProof,
+    ) -> Result<(String, u32)> {
+        let session_id = self.client.session.require_session()?.to_string();
+        match expect_ok_control(self.control(ControlRequest::ClientKeyRotate { session_id, key, proof })?)? {
+            ControlResponse::ClientKeyAck { key_id, key_version } => Ok((key_id, key_version)),
+            _ => Err(ClientError::UnexpectedControl),
+        }
+    }
+
+    /// All key versions of `subject` as stored by the server. Callers must not trust the
+    /// server-provided fingerprint: verify `key` locally (TOFU / out-of-band).
+    pub fn client_key_get(
+        &mut self,
+        subject: dmc_vault::ownership::SubjectId,
+    ) -> Result<Vec<dmc_vault::ownership::ServerStoredPublicKey>> {
+        let session_id = self.client.session.require_session()?.to_string();
+        match expect_ok_control(self.control(ControlRequest::ClientKeyGet { session_id, subject })?)? {
+            ControlResponse::ClientKeys { keys } => Ok(keys),
+            _ => Err(ClientError::UnexpectedControl),
+        }
+    }
+
+    pub fn key_envelope_put(&mut self, envelope: dmc_vault::ownership::ClientKeyEnvelope) -> Result<()> {
+        let session_id = self.client.session.require_session()?.to_string();
+        match expect_ok_control(self.control(ControlRequest::KeyEnvelopePut { session_id, envelope })?)? {
+            ControlResponse::KeyEnvelopeAck => Ok(()),
+            _ => Err(ClientError::UnexpectedControl),
+        }
+    }
+
+    pub fn key_envelope_get(&mut self) -> Result<Vec<dmc_vault::ownership::ClientKeyEnvelope>> {
+        let session_id = self.client.session.require_session()?.to_string();
+        match expect_ok_control(self.control(ControlRequest::KeyEnvelopeGet { session_id })?)? {
+            ControlResponse::KeyEnvelopes { envelopes } => Ok(envelopes),
+            _ => Err(ClientError::UnexpectedControl),
+        }
+    }
+
+    pub fn grant_create(
+        &mut self,
+        grantee: dmc_vault::ownership::SubjectId,
+        expires_at_ms: Option<u64>,
+    ) -> Result<()> {
+        let session_id = self.client.session.require_session()?.to_string();
+        match expect_ok_control(self.control(ControlRequest::GrantCreate {
+            session_id,
+            grantee,
+            expires_at_ms,
+        })?)? {
+            ControlResponse::GrantAck { .. } => Ok(()),
+            _ => Err(ClientError::UnexpectedControl),
+        }
+    }
+
+    pub fn grant_list(&mut self) -> Result<Vec<dmc_protocol::ClientGrantWire>> {
+        let session_id = self.client.session.require_session()?.to_string();
+        match expect_ok_control(self.control(ControlRequest::GrantList { session_id })?)? {
+            ControlResponse::Grants { grants } => Ok(grants),
+            _ => Err(ClientError::UnexpectedControl),
+        }
+    }
+
+    pub fn grant_revoke(&mut self, grantee: dmc_vault::ownership::SubjectId) -> Result<bool> {
+        let session_id = self.client.session.require_session()?.to_string();
+        match expect_ok_control(self.control(ControlRequest::GrantRevoke { session_id, grantee })?)? {
+            ControlResponse::GrantAck { changed } => Ok(changed),
+            _ => Err(ClientError::UnexpectedControl),
+        }
+    }
+
+    pub fn sealed_column_declare(
+        &mut self,
+        schema: &str,
+        table: &str,
+        column: &str,
+        owner_column: Option<&str>,
+    ) -> Result<()> {
+        let session_id = self.client.session.require_session()?.to_string();
+        match expect_ok_control(self.control(ControlRequest::SealedColumnDeclare {
+            session_id,
+            schema: schema.into(),
+            table: table.into(),
+            column: column.into(),
+            owner_column: owner_column.map(str::to_string),
+        })?)? {
+            ControlResponse::SealedColumnAck => Ok(()),
+            _ => Err(ClientError::UnexpectedControl),
+        }
+    }
+
     fn control(&mut self, body: ControlRequest) -> Result<dmc_protocol::ResponseEnvelope<ControlResponse>> {
         match self.client.request(Request::Control(body))? {
             Response::Control(env) => {
@@ -313,5 +503,25 @@ impl ControlClient<'_> {
             }
             Response::Data(_) => Err(ClientError::UnexpectedData),
         }
+    }
+}
+
+/// Operator-side view of an issued invite. `token` is a secret for the enrolling user.
+pub struct IssuedInviteWire {
+    pub invite_id: String,
+    pub token: Vec<u8>,
+    pub name: String,
+    pub tenant: dmc_vault::ownership::TenantId,
+    pub subject: dmc_vault::ownership::SubjectId,
+    pub expires_at_ms: u64,
+}
+
+impl std::fmt::Debug for IssuedInviteWire {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IssuedInviteWire")
+            .field("invite_id", &self.invite_id)
+            .field("subject", &self.subject)
+            .field("token", &"[REDACTED]")
+            .finish()
     }
 }

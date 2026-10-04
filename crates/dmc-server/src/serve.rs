@@ -60,26 +60,75 @@ impl ServeOptions {
     }
 }
 
+/// How the connection loop reaches server state: exclusively for the whole connection,
+/// or through a mutex locked **per request** so other transports (HTTP adapter, control
+/// plane) and other connections can be served in between.
+pub trait StateAccess {
+    fn with<R>(&mut self, f: impl FnOnce(&mut CoreServerState) -> R) -> R;
+}
+
+impl StateAccess for &mut CoreServerState {
+    fn with<R>(&mut self, f: impl FnOnce(&mut CoreServerState) -> R) -> R {
+        f(self)
+    }
+}
+
+/// Per-request locking over a shared state.
+pub struct SharedState<'a>(pub &'a std::sync::Mutex<CoreServerState>);
+
+impl StateAccess for SharedState<'_> {
+    fn with<R>(&mut self, f: impl FnOnce(&mut CoreServerState) -> R) -> R {
+        let mut guard = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        f(&mut guard)
+    }
+}
+
 pub fn serve_connection<C: Read + Write>(
     conn: &mut FramedConnection<C>,
     state: &mut CoreServerState,
     options: &ServeOptions,
     conn_limits: &mut ConnectionLimits,
 ) -> Result<()> {
-    state.try_admit_connection()?;
-    if options.metrics_transport.is_some() {
-        state.metrics_transport = options.metrics_transport;
-    }
-    crate::metrics_rec::connection_accepted(state);
-    let result = serve_connection_loop(conn, state, options, conn_limits);
-    crate::metrics_rec::connection_closed(state);
-    state.release_connection();
+    serve_connection_with(conn, state, options, conn_limits)
+}
+
+/// Serve one connection, locking `state` only while a request is handled.
+pub fn serve_connection_shared<C: Read + Write>(
+    conn: &mut FramedConnection<C>,
+    state: &std::sync::Mutex<CoreServerState>,
+    options: &ServeOptions,
+    conn_limits: &mut ConnectionLimits,
+) -> Result<()> {
+    serve_connection_with(conn, SharedState(state), options, conn_limits)
+}
+
+fn serve_connection_with<C: Read + Write, S: StateAccess>(
+    conn: &mut FramedConnection<C>,
+    mut state: S,
+    options: &ServeOptions,
+    conn_limits: &mut ConnectionLimits,
+) -> Result<()> {
+    state.with(|s| -> Result<()> {
+        s.try_admit_connection()?;
+        if options.metrics_transport.is_some() {
+            s.metrics_transport = options.metrics_transport;
+        }
+        crate::metrics_rec::connection_accepted(s);
+        Ok(())
+    })?;
+    let result = serve_connection_loop(conn, &mut state, options, conn_limits);
+    state.with(|s| {
+        // D5: sessions bound to this connection end with it (no rebind protocol).
+        s.auth.close_channel(&conn_limits.connection_id);
+        crate::metrics_rec::connection_closed(s);
+        s.release_connection();
+    });
     result
 }
 
-fn serve_connection_loop<C: Read + Write>(
+fn serve_connection_loop<C: Read + Write, S: StateAccess>(
     conn: &mut FramedConnection<C>,
-    state: &mut CoreServerState,
+    state: &mut S,
     options: &ServeOptions,
     conn_limits: &mut ConnectionLimits,
 ) -> Result<()> {
@@ -114,8 +163,7 @@ fn serve_connection_loop<C: Read + Write>(
             MessageType::ControlRequest => {
                 ensure_handshaken(conn)?;
                 let env: RequestEnvelope<ControlRequest> = decode_payload(&frame.payload)?;
-                let response =
-                    handle_control(state, env, &options.limits, &conn_limits.connection_id)?;
+                let response = state.with(|s| handle_control(s, env, &options.limits, &conn_limits.connection_id))?;
                 let payload = encode_payload(&response, options.limits.protocol())?;
                 conn.write_frame(&build_frame(MessageType::ControlResponse, payload))?;
                 conn_limits.requests_served += 1;
@@ -123,8 +171,7 @@ fn serve_connection_loop<C: Read + Write>(
             MessageType::DataRequest => {
                 ensure_handshaken(conn)?;
                 let env: RequestEnvelope<DataRequest> = decode_payload(&frame.payload)?;
-                let response =
-                    handle_data(state, env, &options.limits, &conn_limits.connection_id)?;
+                let response = state.with(|s| handle_data(s, env, &options.limits, &conn_limits.connection_id))?;
                 let payload = encode_payload(&response, options.limits.protocol())?;
                 conn.write_frame(&build_frame(MessageType::DataResponse, payload))?;
                 conn_limits.requests_served += 1;

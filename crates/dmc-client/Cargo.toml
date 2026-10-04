@@ -7,6 +7,7 @@ description = "Phase 7.7 — thin DataClient SDK over dmc-protocol / IPC / TLS"
 [dependencies]
 dmc-ipc = { path = "../dmc-ipc" }
 dmc-protocol = { path = "../dmc-protocol" }
+dmc-vault = { path = "../dmc-vault" }
 dmc-remote = { path = "../dmc-remote" }
 dmc-server = { path = "../dmc-server" }
 thiserror = "2"

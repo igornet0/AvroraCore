@@ -10,6 +10,7 @@ path = "src/bin/dmc-pgwire.rs"
 [dependencies]
 dmc-core = { path = "../dmc-core" }
 dmc-sql = { path = "../dmc-sql" }
+dmc-vault = { path = "../dmc-vault" }
 tokio = { version = "1", features = ["full"] }
 
 [dev-dependencies]

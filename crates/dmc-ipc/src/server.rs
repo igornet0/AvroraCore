@@ -35,6 +35,16 @@ impl CoreServer {
         &self.socket_path
     }
 
+    /// Accept **without** holding the state, then serve the connection locking `state`
+    /// per request. Other transports sharing the same `Mutex` (HTTP adapter, control
+    /// plane) are served while this connection is idle.
+    pub fn accept_and_serve_shared(&self, state: &std::sync::Mutex<CoreServerState>) -> Result<()> {
+        let conn = self.listener.accept()?;
+        let mut framed = FramedConnection::new(conn, self.options.limits.frame);
+        let mut conn_limits = ConnectionLimits::default();
+        dmc_server::serve_connection_shared(&mut framed, state, &self.options, &mut conn_limits)
+    }
+
     pub fn accept_and_serve_one(&self, state: &mut CoreServerState) -> Result<()> {
         let conn = self.listener.accept()?;
         let mut framed = FramedConnection::new(conn, self.options.limits.frame);

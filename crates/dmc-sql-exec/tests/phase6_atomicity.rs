@@ -382,3 +382,16 @@ fn recover_from_watermark_after_partial_apply_simulation() {
         1
     );
 }
+
+#[test]
+fn failed_statement_keeps_session_journal_and_catalog() {
+    let dir = tempdir().unwrap();
+    let (mut catalog, mut ctx) = bootstrap(dir.path());
+    exec(&mut catalog, &mut ctx, "INSERT INTO users (id, email) VALUES (1, 'a@x')");
+    // duplicate primary key: the statement fails …
+    exec_fails(&mut catalog, &mut ctx, "INSERT INTO users (id, email) VALUES (1, 'b@x')");
+    // … but the context is intact and the next statement works
+    assert!(ctx.session_catalog().is_ok());
+    assert!(ctx.journal().is_some());
+    exec(&mut catalog, &mut ctx, "INSERT INTO users (id, email) VALUES (2, 'c@x')");
+}

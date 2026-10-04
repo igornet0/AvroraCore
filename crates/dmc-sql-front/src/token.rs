@@ -62,6 +62,8 @@ pub enum TokenKind {
     Integer,
     Float,
     String,
+    /// `X'…'` hex blob literal; `text` holds the hex digits.
+    Blob,
     // Operators / punctuation
     Eq,
     Ne,

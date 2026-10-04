@@ -27,6 +27,8 @@ pub struct BackupRequest {
     pub vault: VaultMetadataSummary,
     /// Override wall-clock; when `None`, a UTC unix-epoch timestamp string is used.
     pub created_at: Option<String>,
+    /// Optional `ownership/` directory (CLIENT_OWNED key directory) to carry along.
+    pub ownership_dir: Option<std::path::PathBuf>,
 }
 
 impl BackupRequest {
@@ -36,7 +38,14 @@ impl BackupRequest {
             options: BackupOptions::default(),
             vault: vault_meta::absent(),
             created_at: None,
+            ownership_dir: None,
         }
+    }
+
+    /// Include the CLIENT_OWNED key directory (and the store's sealed-column rules).
+    pub fn with_ownership_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.ownership_dir = Some(dir.into());
+        self
     }
 
     pub fn with_vault(mut self, vault: VaultMetadataSummary) -> Self {
@@ -188,11 +197,17 @@ impl BackupCoordinator {
             return Err(BackupError::AlreadyExists);
         }
         let artifact = DefaultBackupWriter.write(&manifest, &source, &staging_dir)?;
+        let manifest = crate::ownership::attach(
+            &artifact.root,
+            artifact.manifest,
+            request.ownership_dir.as_deref(),
+            mat.sealed_columns(),
+        )?;
         Ok(StagedBackup {
             backup_id: backup_id.to_string(),
             staging_dir: artifact.root,
             publish_dir,
-            manifest: artifact.manifest,
+            manifest,
         })
     }
 

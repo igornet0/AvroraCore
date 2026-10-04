@@ -21,6 +21,7 @@ pub use limits::{
     DEFAULT_MAX_UNLOCK_BLOB_SIZE,
 };
 pub use message::{
+    ClientGrantWire,
     BackupListItem, ControlRequest, ControlResponse, DataRequest, DataResponse, DiagnosticsWire,
     HandshakeRequest, HandshakeResponse, RequestEnvelope, ResponseEnvelope, ResponseStatus,
     SqlCell, SqlParam, SqlRow, SqlResult, VaultStateWire,

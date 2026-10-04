@@ -138,17 +138,20 @@ fn build_executor_inner(plan: PhysicalPlan, ctx: SharedContext) -> Result<Box<dy
 
 pub fn execute_plan(plan: PhysicalPlan, ctx: &mut ExecutionContext) -> Result<Vec<DataChunk>> {
     let shared = Rc::new(RefCell::new(std::mem::take(ctx)));
-    let mut out = Vec::new();
-    {
+    // The context must be put back on every path: a failed statement (constraint
+    // violation, rejected value) must not leave the session without journal/catalog.
+    let result = (|| {
+        let mut out = Vec::new();
         let mut executor = build_executor(plan, shared.clone())?;
         while let Some(chunk) = executor.next()? {
             out.push(chunk);
         }
-    }
+        Ok(out)
+    })();
     *ctx = Rc::try_unwrap(shared)
         .map_err(|_| ExecutionError::Executor("shared context still borrowed".into()))?
         .into_inner();
-    Ok(out)
+    result
 }
 
 pub fn collect_rows(chunks: &[DataChunk]) -> Vec<Vec<crate::value::Value>> {

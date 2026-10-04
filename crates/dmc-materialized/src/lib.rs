@@ -11,6 +11,8 @@ mod persist;
 mod statistics_catalog;
 mod statistics_refresh;
 
+pub mod protect;
+
 pub use error::{Error, Result};
 pub use event_log::{
     event_id_for_sequence, write_state_event_log, FileStateEventLog, MemoryStateEventLog,

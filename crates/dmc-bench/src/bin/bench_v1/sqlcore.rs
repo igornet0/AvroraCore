@@ -45,6 +45,7 @@ pub fn spawn_dmc() -> DmcServer {
     let socket = dir.path().join("s.sock");
     let child = Command::new(dmc_bin())
         .args(["serve", "--dev", "--data-dir"])
+        .env("AVRORA_DEV", "1")
         .arg(&data)
         .arg("--socket")
         .arg(&socket)

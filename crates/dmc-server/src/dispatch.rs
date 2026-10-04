@@ -52,7 +52,10 @@ fn handle_control_inner(
     if let Err(err) = state.try_begin_request() {
         return Ok(map_limit_err_control(request_id, err));
     }
+    // D5: every session check during this request is bound to this connection.
+    state.auth.begin_request(connection_id);
     let result = handle_control_body(state, env, limits, connection_id, request_id, ctx_base, ctx_sess);
+    state.auth.end_request();
     state.end_in_flight_request();
     result
 }
@@ -327,6 +330,21 @@ fn handle_control_body(
                 }
             }
         }
+        req @ (ControlRequest::ClientKeyRegister { .. }
+        | ControlRequest::ClientKeyGet { .. }
+        | ControlRequest::ClientKeyRotate { .. }
+        | ControlRequest::KeyEnvelopePut { .. }
+        | ControlRequest::KeyEnvelopeGet { .. }
+        | ControlRequest::GrantCreate { .. }
+        | ControlRequest::GrantList { .. }
+        | ControlRequest::GrantRevoke { .. }
+        | ControlRequest::SealedColumnDeclare { .. }
+        | ControlRequest::IdentityInviteCreate { .. }
+        | ControlRequest::IdentityEnroll { .. }
+        | ControlRequest::ClientAuthBegin { .. }
+        | ControlRequest::ClientAuthFinish { .. }) => {
+            Ok(crate::ownership_ops::handle(state, request_id, req))
+        }
         ControlRequest::BackupCreate {
             session_id,
             backup_id,
@@ -564,7 +582,9 @@ fn handle_data_inner(
     if let Err(err) = state.try_begin_request() {
         return Ok(map_limit_err_data(request_id, err));
     }
+    state.auth.begin_request(connection_id);
     let result = handle_data_body(state, env, limits, connection_id, request_id);
+    state.auth.end_request();
     state.end_in_flight_request();
     result
 }
@@ -862,6 +882,12 @@ fn value_to_cell(value: Value) -> SqlCell {
         SqlCell {
             value: "NULL".into(),
             is_null: true,
+        }
+    } else if let Value::Binary(bytes) = &value {
+        // Lossless bytea-style hex (`\x…`), so sealed values survive the wire unchanged.
+        SqlCell {
+            value: format!("\\x{}", hex::encode(bytes)),
+            is_null: false,
         }
     } else {
         SqlCell {

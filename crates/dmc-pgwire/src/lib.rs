@@ -1,6 +1,7 @@
 //! PostgreSQL Simple Query wire protocol — TCP channel adapter for `dmc-core`.
 
 mod adapter;
+pub mod keyfile;
 mod protocol;
 mod server;
 

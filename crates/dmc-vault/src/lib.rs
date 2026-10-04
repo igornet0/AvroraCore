@@ -11,7 +11,9 @@ pub mod crypto;
 pub mod error;
 pub mod key;
 pub mod keypass;
+pub mod ownership;
 pub mod persist;
+pub mod secure_fs;
 pub mod seed;
 pub mod store;
 

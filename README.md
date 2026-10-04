@@ -2,6 +2,8 @@
 
 Encrypted data store plus the **Avrora** runtime: streams, channels, roles, triggers, subsystems, and reference-level overlays.
 
+**Security:** [Auth + cryptographic data ownership](docs/security/cryptographic-ownership.md) (threat model, guarantees, limitations)
+
 **How DBMS + client work:** [English](../docs/en/dbms-and-client.md) · [Русский](../docs/ru/subd-i-klient.md)
 
 ```
