@@ -234,6 +234,20 @@ impl Runtime {
             })
     }
 
+    /// Data key for encrypted remote backups (BackupSAS).
+    ///
+    /// HKDF over the master-derived metadata KEK and the key-tree salt,
+    /// domain-separated by `key_id`. Never persisted; requires an unlocked vault.
+    pub async fn derive_backup_key(&self, key_id: &str) -> Result<crate::backup::keys::BackupKey> {
+        let inner = self.inner.lock().await;
+        if inner.status != DbStatus::Unlocked {
+            return Err(Error::Locked);
+        }
+        let kek = inner.metadata_kek.as_ref().ok_or(Error::Locked)?;
+        let kv = inner.kv.as_ref().ok_or(Error::Locked)?;
+        Ok(crate::backup::keys::backup_key_from_kek(kek, kv.tree().salt(), key_id))
+    }
+
     /// Create an empty vault: crypto key tree + journal only (no roles/users).
     /// Use [`Self::devo_init`] or [`Self::create_dev`] to provision root identity.
     pub async fn create(&self) -> Result<(String, String)> {

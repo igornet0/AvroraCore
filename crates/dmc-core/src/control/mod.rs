@@ -1,6 +1,8 @@
 //! Avrora Control Plane: TLS 1.3 listener, bootstrap, device registry, unlock RPC.
 
+pub mod backup_catalog;
 pub mod backup_config;
+pub mod backup_targets;
 pub mod capability_rotation_config;
 mod commands;
 mod data;

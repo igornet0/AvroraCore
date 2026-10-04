@@ -525,7 +525,7 @@ fn map_backup_err(err: crate::backup::BackupError) -> ControlMsg {
         BackupError::InvalidId | BackupError::AlreadyExists => {
             ProtocolErrorCode::InvalidRequest.as_str()
         }
-        BackupError::Io(_) => ProtocolErrorCode::InternalError.as_str(),
+        BackupError::Io(_) | BackupError::Remote(_) => ProtocolErrorCode::InternalError.as_str(),
     };
     ControlMsg::Error {
         message: message.into(),
