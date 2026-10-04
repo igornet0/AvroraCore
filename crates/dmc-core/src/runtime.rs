@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -17,7 +17,7 @@ use dmc_vault::persist::{DbSnapshot, default_db_path};
 use dmc_vault::store::EncryptedKv;
 use dmc_vault::{KeyMaterial, seed_auth_service, seed_demo};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit, Semaphore, broadcast, oneshot};
 
 use crate::audit::{AuditLog, AuditRecord};
 use crate::channel::{ChannelInfo, ChannelSpec};
@@ -58,6 +58,9 @@ use dmc_security::AccessControl;
 const PRODUCT_NAME: &str = "Avrora";
 const LOCAL_PRODUCER_ID: &str = "local";
 const REPLAY_LEASE_TTL_MS: u64 = 15 * 60 * 1000;
+/// Upper bound on `put_data` writes appended but not yet durable/acknowledged (group commit
+/// backpressure: further writers wait for a permit instead of growing memory unboundedly).
+const MAX_PENDING_PUTS: usize = 4096;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PutOptions {
@@ -127,6 +130,22 @@ struct RuntimeInner {
     /// Published snapshot floor loaded from manifest (Phase 5.2). None → no snapshot pin.
     published_snapshot_sequence: Option<u64>,
     replay_leases: Vec<ReplayPin>,
+    /// Group commit: `put_data` entries appended to the journal, awaiting fsync. Applied to
+    /// in-memory state and acknowledged strictly in sequence order once durable.
+    pending_puts: VecDeque<PendingPut>,
+    /// A group-commit task is running (it drains `pending_puts` until empty).
+    group_leader_active: bool,
+}
+
+struct PendingPut {
+    staged: StagedMutation,
+    idempotency: Option<(String, String)>,
+    /// Path as given by the caller (recorded in producer idempotency metadata).
+    raw_path: String,
+    waiter: oneshot::Sender<Result<PutResult>>,
+    /// Concurrent puts with the same idempotency key, answered with this entry (`replay`).
+    followers: Vec<oneshot::Sender<Result<PutResult>>>,
+    _permit: OwnedSemaphorePermit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,6 +163,10 @@ pub struct Runtime {
     inner: Arc<Mutex<RuntimeInner>>,
     events: broadcast::Sender<CoreEvent>,
     capability_rotation_dir: Arc<std::sync::Mutex<Option<PathBuf>>>,
+    put_permits: Arc<Semaphore>,
+    /// `DMC_GROUP_COMMIT=0` disables group commit: each put is fsynced under the runtime lock
+    /// (previous behaviour; same durability, no batching). Default: enabled.
+    group_commit: bool,
 }
 
 impl Runtime {
@@ -194,8 +217,12 @@ impl Runtime {
                 now_ms_override: None,
                 published_snapshot_sequence: None,
                 replay_leases: Vec::new(),
+                pending_puts: VecDeque::new(),
+                group_leader_active: false,
             })),
             events,
+            put_permits: Arc::new(Semaphore::new(MAX_PENDING_PUTS)),
+            group_commit: std::env::var("DMC_GROUP_COMMIT").map_or(true, |v| v != "0"),
         }
     }
 
@@ -212,15 +239,15 @@ impl Runtime {
     }
 
     pub async fn status(&self) -> DbStatus {
-        self.inner.lock().await.status
+        self.lock_committed().await.status
     }
 
     pub async fn db_path(&self) -> PathBuf {
-        self.inner.lock().await.db_path.clone()
+        self.lock_committed().await.db_path.clone()
     }
 
     pub async fn db_id(&self) -> Option<String> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         inner
             .snapshot
             .as_ref()
@@ -256,7 +283,7 @@ impl Runtime {
 
     /// Like [`Self::create`], optionally with a fixed master hex (docker / env.dev fixtures).
     pub async fn create_with_master(&self, master_hex: Option<&str>) -> Result<(String, String)> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         let layout = StorageLayout::from_db_path(&inner.db_path);
         if inner.status != DbStatus::Empty || layout.vault_exists() {
             return Err(Error::from_vault(dmc_vault::Error::AlreadyExists));
@@ -293,7 +320,7 @@ impl Runtime {
 
     /// Provision root role/user/capabilities (and optional demo data). Vault must be unlocked.
     pub async fn devo_init(&self, with_demo: bool) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         if inner.status != DbStatus::Unlocked {
             return Err(Error::Locked);
         }
@@ -312,7 +339,7 @@ impl Runtime {
     /// Root identity + standard `auth/*` tree and embeddable service roles.
     pub async fn auth_service_init(&self) -> Result<()> {
         self.devo_init(false).await?;
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         if inner.status != DbStatus::Unlocked {
             return Err(Error::Locked);
         }
@@ -325,7 +352,7 @@ impl Runtime {
     }
 
     pub async fn is_dev_provisioned(&self) -> Result<bool> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         if inner.status == DbStatus::Empty {
             return Ok(false);
         }
@@ -343,7 +370,7 @@ impl Runtime {
     /// Unlock with raw master hex received over the control plane (never stored).
     pub async fn unlock(&self, master_hex: &str) -> Result<SessionId> {
         let master = KeyMaterial::from_hex(master_hex)?;
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         if inner.status == DbStatus::Unlocked {
             return Err(Error::from_vault(dmc_vault::Error::AlreadyUnlocked));
         }
@@ -383,7 +410,7 @@ impl Runtime {
     }
 
     pub async fn lock(&self) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         if inner.status != DbStatus::Unlocked {
             return Err(Error::Locked);
         }
@@ -426,18 +453,18 @@ impl Runtime {
     }
 
     pub async fn persist(&self) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         persist_checkpoint(&mut inner)
     }
 
     pub async fn force_snapshot(&self) -> Result<u64> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         publish_materialized_snapshot(&mut inner)
     }
 
     pub async fn last_sequence(&self) -> u64 {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         inner
             .journal
             .as_ref()
@@ -452,7 +479,7 @@ impl Runtime {
         path_scope: &str,
         sequence: u64,
     ) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let key_path = parse_path(path_scope)?;
         inner
@@ -479,7 +506,7 @@ impl Runtime {
     }
 
     pub async fn get_offset(&self, consumer_id: &str) -> Option<ConsumerOffset> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         if let Some(p) = inner.consumer_meta.progress.get(consumer_id) {
             return Some(ConsumerOffset {
                 consumer_id: consumer_id.to_string(),
@@ -491,7 +518,7 @@ impl Runtime {
     }
 
     pub async fn open_session(&self, role_id: &str) -> Result<SessionId> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         Ok(inner.access.open_session(role_id)?)
     }
@@ -501,7 +528,7 @@ impl Runtime {
         user_id: &str,
         device_id: Option<&str>,
     ) -> Result<SessionId> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let id = inner.access.open_user_session(user_id, device_id)?;
         inner.audit.record_security(
@@ -522,7 +549,7 @@ impl Runtime {
         id: String,
         roles: Vec<String>,
     ) -> Result<dmc_security::User> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let actor = inner.access.capability(session)?;
         if !actor.permissions.contains(dmc_vault::Permission::Grant) {
@@ -550,7 +577,7 @@ impl Runtime {
         user_id: &str,
         roles: Vec<String>,
     ) -> Result<dmc_security::User> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let actor = inner.access.capability(session)?;
         if !actor.permissions.contains(dmc_vault::Permission::Grant) {
@@ -573,7 +600,7 @@ impl Runtime {
     }
 
     pub async fn disable_user(&self, session: &SessionId, user_id: &str) -> Result<dmc_security::User> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let actor = inner.access.capability(session)?;
         if !actor.permissions.contains(dmc_vault::Permission::Grant) {
@@ -596,7 +623,7 @@ impl Runtime {
     }
 
     pub async fn list_users(&self) -> Result<Vec<dmc_security::User>> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         Ok(inner.access.users().list())
     }
@@ -609,7 +636,7 @@ impl Runtime {
         permissions: PermissionSet,
         ttl_ms: Option<u64>,
     ) -> Result<dmc_security::IssuedCapability> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let issued = inner
             .access
@@ -632,7 +659,7 @@ impl Runtime {
         session: &SessionId,
         capability_id: &str,
     ) -> Result<dmc_security::IssuedCapability> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         inner
             .access
@@ -668,7 +695,7 @@ impl Runtime {
     }
 
     pub async fn revoke_user_session(&self, session: &SessionId, target: &SessionId) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         inner
             .access
@@ -696,13 +723,13 @@ impl Runtime {
     }
 
     pub async fn list_capabilities(&self) -> Result<Vec<dmc_security::IssuedCapability>> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         Ok(inner.access.list_issued())
     }
 
     pub async fn rotate_all_user_capabilities(&self) -> Result<dmc_security::RotationReport> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let _ = inner.access.admin_session_id()?;
         let report = inner.access.rotate_all_user_capabilities()?;
@@ -720,19 +747,19 @@ impl Runtime {
     }
 
     pub async fn bind_role(&self, session: SessionId, role: &str) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         Ok(inner.access.bind_role(&session, role)?)
     }
 
     pub async fn admin_session(&self) -> Result<SessionId> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         Ok(inner.access.admin_session_id()?)
     }
 
     pub async fn configure_channel(&self, spec: ChannelSpec) -> Result<ChannelId> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         if inner.hub.channel(&spec.id).is_ok() {
             return Err(Error::ChannelExists(spec.id.to_string()));
@@ -760,19 +787,19 @@ impl Runtime {
     }
 
     pub async fn start_channel(&self, id: &ChannelId) -> Result<()> {
-        self.inner.lock().await.hub.start_channel(id).map_err(Error::from)
+        self.lock_committed().await.hub.start_channel(id).map_err(Error::from)
     }
 
     pub async fn stop_channel(&self, id: &ChannelId) -> Result<()> {
-        self.inner.lock().await.hub.stop_channel(id).map_err(Error::from)
+        self.lock_committed().await.hub.stop_channel(id).map_err(Error::from)
     }
 
     pub async fn list_channels(&self) -> Vec<ChannelInfo> {
-        self.inner.lock().await.hub.list_channels()
+        self.lock_committed().await.hub.list_channels()
     }
 
     pub async fn create_stream(&self, spec: StreamSpec) -> Result<StreamId> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         inner.hub.channel(&spec.channel_id)?;
         if inner.hub.stream(&spec.id).is_ok() {
@@ -801,7 +828,7 @@ impl Runtime {
     }
 
     pub async fn list_streams(&self) -> Vec<StreamSpec> {
-        self.inner.lock().await.hub.list_streams()
+        self.lock_committed().await.hub.list_streams()
     }
 
     pub async fn create_subscription(
@@ -810,7 +837,7 @@ impl Runtime {
         stream_id: &StreamId,
         consumer_id: Option<&str>,
     ) -> Result<Subscription> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let spec = inner.hub.stream(stream_id)?;
         let actor = inner.access.session(session)?;
@@ -860,11 +887,11 @@ impl Runtime {
     }
 
     pub async fn list_subscriptions(&self) -> Vec<Subscription> {
-        self.inner.lock().await.subscriptions.list()
+        self.lock_committed().await.subscriptions.list()
     }
 
     pub async fn get_subscription(&self, id: &SubscriptionId) -> Result<Subscription> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let mut sub = inner.subscriptions.get(id)?.clone();
         if let Some(p) = inner.consumer_meta.get(id) {
@@ -881,7 +908,7 @@ impl Runtime {
         group_id: GroupId,
         stream_id: &StreamId,
     ) -> Result<ConsumerGroup> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let spec = inner.hub.stream(stream_id)?;
         require_group_stream_access(&inner, session, &spec)?;
@@ -912,7 +939,7 @@ impl Runtime {
         stream_id: &StreamId,
         policy: crate::group::GroupPolicy,
     ) -> Result<ConsumerGroup> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let spec = inner.hub.stream(stream_id)?;
         require_group_stream_access(&inner, session, &spec)?;
@@ -943,7 +970,7 @@ impl Runtime {
         member_id: MemberId,
         device_id: Option<&str>,
     ) -> Result<GroupMember> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let stream_id = inner.group_meta.get(group_id)?.stream_id.clone();
         let spec = inner.hub.stream(&stream_id)?;
@@ -967,7 +994,7 @@ impl Runtime {
         group_id: &GroupId,
         member_id: &MemberId,
     ) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let stream_id = inner.group_meta.get(group_id)?.stream_id.clone();
         let spec = inner.hub.stream(&stream_id)?;
@@ -983,7 +1010,7 @@ impl Runtime {
         session: &SessionId,
         group_id: &GroupId,
     ) -> Result<GroupDescription> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let group = inner.group_meta.get(group_id)?;
         let spec = inner.hub.stream(&group.stream_id)?;
@@ -993,7 +1020,7 @@ impl Runtime {
 
     /// Phase 5.8.2: delete an empty group.
     pub async fn delete_group(&self, session: &SessionId, group_id: &GroupId) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let stream_id = inner.group_meta.get(group_id)?.stream_id.clone();
         let spec = inner.hub.stream(&stream_id)?;
@@ -1010,7 +1037,7 @@ impl Runtime {
         group_id: &GroupId,
         member_id: &MemberId,
     ) -> Result<GroupMember> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let stream_id = inner.group_meta.get(group_id)?.stream_id.clone();
         let spec = inner.hub.stream(&stream_id)?;
@@ -1034,7 +1061,7 @@ impl Runtime {
 
     /// Phase 5.8.3: remove lease-expired members (`lease_expires_at_ms <= now`).
     pub async fn reconcile_group_leases(&self) -> Result<LeaseReconcileResult> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         reconcile_group_leases_inner(&mut inner)
     }
@@ -1050,7 +1077,7 @@ impl Runtime {
         member_id: &MemberId,
         generation: u64,
     ) -> Result<Option<GroupDeliveredEvent>> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         group_consume_inner(&mut inner, session, group_id, member_id, generation)
     }
@@ -1064,7 +1091,7 @@ impl Runtime {
         generation: u64,
         delivery_id: &crate::subscription::DeliveryId,
     ) -> Result<crate::group::GroupAckResult> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         group_ack_inner(&mut inner, session, group_id, member_id, generation, delivery_id)
     }
@@ -1079,7 +1106,7 @@ impl Runtime {
         generation: u64,
         delivery_id: &crate::subscription::DeliveryId,
     ) -> Result<crate::group::GroupRetryResponse> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         group_retry_inner(&mut inner, session, group_id, member_id, generation, delivery_id)
     }
@@ -1090,7 +1117,7 @@ impl Runtime {
         session: &SessionId,
         group_id: &GroupId,
     ) -> Result<Vec<crate::group::GroupDlqEntry>> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let group = inner.group_meta.get(group_id)?;
         let spec = inner.hub.stream(&group.stream_id)?;
@@ -1106,7 +1133,7 @@ impl Runtime {
         partition_id: u32,
         sequence: u64,
     ) -> Result<crate::group::GroupDlqEntry> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let group = inner.group_meta.get(group_id)?;
         let spec = inner.hub.stream(&group.stream_id)?;
@@ -1129,7 +1156,7 @@ impl Runtime {
         subscription_id: &SubscriptionId,
         _limit: usize,
     ) -> Result<Vec<DeliveredEvent>> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let sub = inner.subscriptions.get(subscription_id)?.clone();
         match consume_next(&mut inner, &sub)? {
@@ -1143,7 +1170,7 @@ impl Runtime {
         subscription_id: &SubscriptionId,
         limits: BatchLimits,
     ) -> Result<Vec<DeliveredEvent>> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let sub = inner.subscriptions.get(subscription_id)?.clone();
         let policy = inner
@@ -1182,7 +1209,7 @@ impl Runtime {
     }
 
     pub async fn pending_delivery(&self, subscription_id: &SubscriptionId) -> Result<Option<crate::subscription::PendingDelivery>> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         Ok(inner
             .consumer_meta
@@ -1192,11 +1219,11 @@ impl Runtime {
 
     /// Test clock. `None` restores wall clock. Not persisted.
     pub async fn set_now_ms(&self, now_ms: Option<u64>) {
-        self.inner.lock().await.now_ms_override = now_ms;
+        self.lock_committed().await.now_ms_override = now_ms;
     }
 
     pub async fn retry_policy(&self, subscription_id: &SubscriptionId) -> Result<RetryPolicy> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let _ = inner.subscriptions.get(subscription_id)?;
         Ok(inner
@@ -1212,7 +1239,7 @@ impl Runtime {
         subscription_id: &SubscriptionId,
         policy: RetryPolicy,
     ) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let sub = inner.subscriptions.get(subscription_id)?.clone();
         require_subscription_control(&inner, session, &sub)?;
@@ -1222,7 +1249,7 @@ impl Runtime {
     }
 
     pub async fn consumer_policy(&self, subscription_id: &SubscriptionId) -> Result<ConsumerPolicy> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let _ = inner.subscriptions.get(subscription_id)?;
         Ok(inner
@@ -1238,7 +1265,7 @@ impl Runtime {
         subscription_id: &SubscriptionId,
         policy: ConsumerPolicy,
     ) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let sub = inner.subscriptions.get(subscription_id)?.clone();
         require_subscription_control(&inner, session, &sub)?;
@@ -1255,7 +1282,7 @@ impl Runtime {
         from_sequence: u64,
         limit: usize,
     ) -> Result<Vec<DeliveredEvent>> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let sub = inner.subscriptions.get(subscription_id)?.clone();
         validate_subscription_capability(&inner, &sub, None)?;
@@ -1274,26 +1301,26 @@ impl Runtime {
 
     /// Phase 5.1: compute safe trim floor from pins. Does not delete journal data.
     pub async fn retention_watermark(&self) -> Result<RetentionWatermark> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         Ok(compute_retention_watermark(&inner))
     }
 
     /// Phase 5.5: retention policy component only (dynamic pin). Does not delete data.
     pub async fn retention_policy_trim_through(&self) -> Result<Option<u64>> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         compute_retention_policy_trim(&inner)
     }
 
     pub async fn retention_policy(&self) -> Result<RetentionPolicy> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         Ok(inner.retention_policy.clone())
     }
 
     pub async fn journal_segment_infos(&self) -> Result<Vec<dmc_journal::JournalSegmentInfo>> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         inner
             .journal
@@ -1308,7 +1335,7 @@ impl Runtime {
         session: &SessionId,
         policy: RetentionPolicy,
     ) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let actor = inner.access.capability(session)?;
         if !actor.permissions.contains(Permission::Grant) {
@@ -1337,7 +1364,7 @@ impl Runtime {
 
     /// Sequence of the last published snapshot manifest, if any.
     pub async fn published_snapshot_sequence(&self) -> Result<Option<u64>> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         Ok(inner.published_snapshot_sequence)
     }
@@ -1349,7 +1376,7 @@ impl Runtime {
         from_sequence: u64,
         ttl_ms: u64,
     ) -> Result<String> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let _ = inner.subscriptions.get(subscription_id)?;
         let now = consumer_now_ms(&inner);
@@ -1365,14 +1392,14 @@ impl Runtime {
     }
 
     pub async fn end_replay_lease(&self, lease_id: &str) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         inner.replay_leases.retain(|l| l.lease_id != lease_id);
         Ok(())
     }
 
     pub async fn compaction_policy(&self) -> Result<CompactionPolicy> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         Ok(inner.compaction_policy.clone())
     }
@@ -1382,7 +1409,7 @@ impl Runtime {
         session: &SessionId,
         policy: CompactionPolicy,
     ) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let actor = inner.access.capability(session)?;
         if !actor.permissions.contains(Permission::Grant) {
@@ -1410,7 +1437,7 @@ impl Runtime {
     }
 
     pub async fn select_compaction_candidate(&self) -> Result<Option<CompactionCandidate>> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let journal = inner.journal.as_ref().ok_or(Error::Locked)?;
         journal
@@ -1423,7 +1450,7 @@ impl Runtime {
         &self,
         partition_id: u32,
     ) -> Result<Option<CompactionCandidate>> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let journal = inner.journal.as_ref().ok_or(Error::Locked)?;
         journal
@@ -1436,7 +1463,7 @@ impl Runtime {
 
     /// Phase 5.6.2 / 5.7.8: build physical compaction artifact without changing authoritative topology.
     pub async fn compact_journal(&self) -> Result<CompactionArtifact> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let policy = inner.compaction_policy.clone();
         let journal = inner.journal.as_mut().ok_or(Error::Locked)?;
@@ -1449,7 +1476,7 @@ impl Runtime {
 
     /// Phase 5.7.8: compact one partition (one topology job).
     pub async fn compact_journal_partition(&self, partition_id: u32) -> Result<CompactionArtifact> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let policy = inner.compaction_policy.clone();
         let journal = inner.journal.as_mut().ok_or(Error::Locked)?;
@@ -1467,7 +1494,7 @@ impl Runtime {
 
     /// Phase 5.6.3: publish compaction artifact into authoritative journal manifest.
     pub async fn publish_compaction(&self, artifact: CompactionArtifact) -> Result<JournalManifest> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let journal = inner.journal.as_mut().ok_or(Error::Locked)?;
         let mut compactor = JournalSegmentCompactor::new(journal);
@@ -1476,7 +1503,7 @@ impl Runtime {
 
     /// Phase 5.3: trim sealed journal segments through the current retention watermark.
     pub async fn trim_journal(&self) -> Result<TrimResult> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let through = compute_retention_watermark(&inner)
             .trim_through
@@ -1486,14 +1513,14 @@ impl Runtime {
 
     /// Trim through `through` if it does not exceed the computed retention watermark.
     pub async fn trim_journal_through(&self, through: u64) -> Result<TrimResult> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         trim_journal_inner(&mut inner, through)
     }
 
     /// First journal sequence still available for replay after segment GC.
     pub async fn oldest_available_sequence(&self) -> Result<u64> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         inner
             .journal
@@ -1511,7 +1538,7 @@ impl Runtime {
         subscription_id: &SubscriptionId,
         delivery_id: &DeliveryId,
     ) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let sub = inner.subscriptions.get(subscription_id)?.clone();
         require_subscription_control(&inner, session, &sub)?;
@@ -1534,7 +1561,7 @@ impl Runtime {
         subscription_id: &SubscriptionId,
         delivery_ids: &[DeliveryId],
     ) -> Result<AckBatchResult> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let sub = inner.subscriptions.get(subscription_id)?.clone();
         require_subscription_control(&inner, session, &sub)?;
@@ -1555,14 +1582,14 @@ impl Runtime {
     }
 
     pub async fn consumer_lag(&self, subscription_id: &SubscriptionId) -> Result<ConsumerLag> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let _ = inner.subscriptions.get(subscription_id)?;
         Ok(compute_lag(&inner, subscription_id))
     }
 
     pub async fn consumer_metrics(&self) -> Result<ConsumerMetrics> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let journal_head = journal_head(&inner);
         let subscriptions: Vec<_> = inner
@@ -1584,7 +1611,7 @@ impl Runtime {
         session: &SessionId,
         subscription_id: &SubscriptionId,
     ) -> Result<Vec<DlqEntry>> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let _ = inner.subscriptions.get(subscription_id)?;
         require_dlq_perm(&inner, session, subscription_id, Permission::Read)?;
@@ -1592,7 +1619,7 @@ impl Runtime {
     }
 
     pub async fn read_dlq_entry(&self, session: &SessionId, entry_id: &DlqEntryId) -> Result<DlqEntry> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let entry = dlq::find_overlay_entry(&inner.overlay, entry_id)
             .ok_or_else(|| Error::UnknownDlq(entry_id.to_string()))?;
@@ -1605,7 +1632,7 @@ impl Runtime {
         session: &SessionId,
         entry_id: &DlqEntryId,
     ) -> Result<DeliveredEvent> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let envelope = dlq::find_overlay_entry(&inner.overlay, entry_id)
             .ok_or_else(|| Error::UnknownDlq(entry_id.to_string()))?;
@@ -1624,7 +1651,7 @@ impl Runtime {
     }
 
     pub async fn delete_dlq(&self, session: &SessionId, entry_id: &DlqEntryId) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let envelope = dlq::find_overlay_entry(&inner.overlay, entry_id)
             .ok_or_else(|| Error::UnknownDlq(entry_id.to_string()))?;
@@ -1657,11 +1684,11 @@ impl Runtime {
         &self,
         id: &StreamId,
     ) -> Result<broadcast::Receiver<StreamMessage>> {
-        Ok(self.inner.lock().await.hub.subscribe_stream(id)?)
+        Ok(self.lock_committed().await.hub.subscribe_stream(id)?)
     }
 
     pub async fn register_trigger(&self, trigger: TriggerDef) -> Result<TriggerId> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         if inner.hub.trigger(&trigger.id).is_ok() {
             return Err(Error::Invalid(format!("trigger exists: {}", trigger.id)));
@@ -1689,16 +1716,16 @@ impl Runtime {
     }
 
     pub async fn list_triggers(&self) -> Vec<TriggerDef> {
-        self.inner.lock().await.hub.list_triggers()
+        self.lock_committed().await.hub.list_triggers()
     }
 
     pub async fn recent_events(&self, limit: usize) -> Vec<CoreEvent> {
-        self.inner.lock().await.hub.recent_events(limit)
+        self.lock_committed().await.hub.recent_events(limit)
     }
 
     /// Seal static base data (immutable reference). Prefer this for catalogs/seeds.
     pub async fn seal_base(&self, session: &SessionId, path: &str, payload: &[u8]) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         write_base(&mut inner, &self.events, session, path, payload)
     }
@@ -1711,7 +1738,7 @@ impl Runtime {
         path: &str,
         payload: &[u8],
     ) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let entry = inner.hub.stream_entry(&stream)?;
         if entry.spec.direction != crate::stream::StreamDirection::Inbound {
@@ -1750,7 +1777,7 @@ impl Runtime {
         payload: &[u8],
         source: &str,
     ) -> Result<OverlayPatch> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         apply_overlay(
             &mut inner,
@@ -1769,7 +1796,7 @@ impl Runtime {
     }
 
     pub async fn list_overlays(&self, prefix: &str) -> Vec<OverlayPatch> {
-        self.inner.lock().await.overlay.list_under(prefix)
+        self.lock_committed().await.overlay.list_under(prefix)
     }
 
     pub async fn resolve(&self, session: &SessionId, path: &str) -> Result<ResolvedView> {
@@ -1804,6 +1831,12 @@ impl Runtime {
         Ok(())
     }
 
+    /// Durable put with group commit.
+    ///
+    /// The entry is authorized and appended under the runtime lock, then a single group-commit
+    /// task fsyncs everything appended so far *outside* the lock and applies / acknowledges the
+    /// batch in sequence order. `Ok` is returned only after this entry's fsync succeeded and it
+    /// was applied — the same durability contract as before, amortised over concurrent writers.
     pub async fn put_data_with(
         &self,
         session: &SessionId,
@@ -1811,53 +1844,120 @@ impl Runtime {
         payload: &[u8],
         options: Option<PutOptions>,
     ) -> Result<PutResult> {
-        let mut inner = self.inner.lock().await;
-        require_unlocked(&inner)?;
-        if let Some(opts) = options.as_ref() {
-            if !opts.idempotency_key.is_empty() {
-                let producer_id = producer_id_of(opts);
-                if let Some(rec) = inner.producer_meta.lookup(producer_id, &opts.idempotency_key) {
+        let permit = self
+            .put_permits
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| Error::Invalid("runtime write queue closed".into()))?;
+        let idempotency = options
+            .as_ref()
+            .filter(|o| !o.idempotency_key.is_empty())
+            .map(|o| (producer_id_of(o).to_string(), o.idempotency_key.clone()));
+        let (rx, follower, lead) = {
+            let mut inner = self.inner.lock().await;
+            require_unlocked(&inner)?;
+            if let Some((producer_id, key)) = idempotency.as_ref() {
+                if let Some(rec) = inner.producer_meta.lookup(producer_id, key) {
                     return Ok(PutResult {
                         event_id: rec.event_id.clone(),
                         sequence: rec.sequence,
                         replay: true,
                     });
                 }
+                // Same key still in flight: answer with that entry once it is durable.
+                if let Some(pending) = inner
+                    .pending_puts
+                    .iter_mut()
+                    .find(|p| p.idempotency.as_ref() == Some(&(producer_id.clone(), key.clone())))
+                {
+                    let (tx, rx) = oneshot::channel();
+                    pending.followers.push(tx);
+                    (rx, true, false)
+                } else {
+                    let rx = self.stage_put(&mut inner, session, path, payload, idempotency, permit)?;
+                    (rx, false, self.start_commit(&mut inner))
+                }
+            } else {
+                let rx = self.stage_put(&mut inner, session, path, payload, None, permit)?;
+                (rx, false, self.start_commit(&mut inner))
             }
+        };
+        if lead {
+            tokio::spawn(group_commit_loop(self.inner.clone()));
         }
-        let applied = apply_overlay(
-            &mut inner,
-            &self.events,
-            session,
-            path,
-            payload,
-            "api",
-            None,
-        )?;
-        if let Some(opts) = options.as_ref() {
-            if !opts.idempotency_key.is_empty() {
-                let producer_id = producer_id_of(opts);
-                let now = consumer_now_ms(&inner);
-                inner.producer_meta.remember(
-                    producer_id,
-                    &opts.idempotency_key,
-                    applied.event_id.clone(),
-                    applied.sequence,
-                    path.to_string(),
-                    now,
-                );
-                persist_producer_state(&mut inner)?;
-            }
-        }
+        let result = rx
+            .await
+            .map_err(|_| Error::Invalid("group commit aborted".into()))??;
         Ok(PutResult {
-            event_id: applied.event_id,
-            sequence: applied.sequence,
-            replay: false,
+            replay: result.replay || follower,
+            ..result
         })
     }
 
-    pub async fn delete_data(&self, session: &SessionId, path: &str) -> Result<()> {
+    fn stage_put(
+        &self,
+        inner: &mut RuntimeInner,
+        session: &SessionId,
+        path: &str,
+        payload: &[u8],
+        idempotency: Option<(String, String)>,
+        permit: OwnedSemaphorePermit,
+    ) -> Result<oneshot::Receiver<Result<PutResult>>> {
+        let key_path = parse_path(path)?;
+        inner
+            .access
+            .authorize(session, &key_path, Permission::Write)?;
+        let body = OverlayPutBody {
+            payload: payload.to_vec(),
+            source: "api".to_string(),
+        };
+        let staged = stage_mutation(
+            inner,
+            session,
+            &key_path,
+            JournalEventKind::OverlayApply,
+            Operation::OverlayPut,
+            encode_cbor(&body)?,
+            "OVERLAY",
+            EventKind::OverlayApply,
+            payload.to_vec(),
+            None,
+        )?;
+        let (tx, rx) = oneshot::channel();
+        inner.pending_puts.push_back(PendingPut {
+            staged,
+            idempotency: idempotency.map(|(p, k)| (p, k)),
+            raw_path: path.to_string(),
+            waiter: tx,
+            followers: Vec::new(),
+            _permit: permit,
+        });
+        Ok(rx)
+    }
+
+    /// After staging a put: with group commit, returns whether the caller must spawn the
+    /// leader; without it, commits synchronously under the lock right away.
+    fn start_commit(&self, inner: &mut RuntimeInner) -> bool {
+        if self.group_commit {
+            start_leader(inner)
+        } else {
+            commit_barrier(inner);
+            false
+        }
+    }
+
+    /// Runtime lock after committing any pending group-commit writes (synchronous fsync).
+    /// Every operation other than `put_data` / plain reads uses this, so it observes and acts
+    /// on fully durable, applied state exactly as before group commit existed.
+    async fn lock_committed(&self) -> MutexGuard<'_, RuntimeInner> {
         let mut inner = self.inner.lock().await;
+        commit_barrier(&mut inner);
+        inner
+    }
+
+    pub async fn delete_data(&self, session: &SessionId, path: &str) -> Result<()> {
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let key_path = parse_path(path)?;
         inner
@@ -1905,7 +2005,7 @@ impl Runtime {
 
     /// Live schema: key-tree nodes + overlay annotations.
     pub async fn schema_snapshot(&self) -> Result<SchemaSnapshot> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let nodes = inner.kv.as_ref().ok_or(Error::Locked)?.tree().list_nodes();
         let overlays = inner.overlay.list();
@@ -1921,13 +2021,13 @@ impl Runtime {
     }
 
     pub async fn list_nodes(&self) -> Result<Vec<KeyNodeMeta>> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         Ok(inner.kv.as_ref().ok_or(Error::Locked)?.tree().list_nodes())
     }
 
     pub async fn ensure_node(&self, session: &SessionId, path: &str) -> Result<KeyNodeMeta> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let key_path = parse_path(path)?;
         let cap = inner.access.capability(session)?;
@@ -1943,7 +2043,7 @@ impl Runtime {
     }
 
     pub async fn revoke_node(&self, session: &SessionId, path: &str) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let key_path = parse_path(path)?;
         let cap = inner.access.capability(session)?;
@@ -1964,7 +2064,7 @@ impl Runtime {
     }
 
     pub async fn rotate_node(&self, session: &SessionId, path: &str) -> Result<KeyNodeMeta> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let key_path = parse_path(path)?;
         let cap = inner.access.capability(session)?;
@@ -1991,7 +2091,7 @@ impl Runtime {
     }
 
     pub async fn list_roles(&self) -> Result<Vec<Role>> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         Ok(inner.access.roles().list())
     }
@@ -2004,7 +2104,7 @@ impl Runtime {
         scope: KeyPath,
         permissions: PermissionSet,
     ) -> Result<Role> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let actor = inner.access.capability(session)?;
         let _ = actor
@@ -2055,7 +2155,7 @@ impl Runtime {
         scope: Option<KeyPath>,
         permissions: Option<PermissionSet>,
     ) -> Result<Role> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let actor = inner.access.capability(session)?;
         let existing = inner
@@ -2105,7 +2205,7 @@ impl Runtime {
     }
 
     pub async fn delete_role(&self, session: &SessionId, id: &str) -> Result<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         let active = inner.access.admin_session()?.role_id.clone();
         if active == id {
@@ -2137,13 +2237,13 @@ impl Runtime {
     }
 
     pub async fn active_role(&self) -> Result<Role> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         Ok(inner.access.active_role()?)
     }
 
     pub async fn audit_log(&self) -> Vec<AuditRecord> {
-        self.inner.lock().await.audit.list().to_vec()
+        self.lock_committed().await.audit.list().to_vec()
     }
 
     pub async fn apply_session_to_storage(
@@ -2151,26 +2251,26 @@ impl Runtime {
         session: &SessionId,
         storage: &mut StorageEngine,
     ) -> Result<()> {
-        let inner = self.inner.lock().await;
+        let inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         storage.set_capability(inner.access.capability(session)?);
         Ok(())
     }
 
     pub async fn register_subsystem(&self, spec: SubsystemSpec) -> Result<SubsystemId> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.lock_committed().await;
         require_unlocked(&inner)?;
         inner.hub.stream(&spec.stream_id)?;
         inner.subsystems.register(spec).map_err(Error::Invalid)
     }
 
     pub async fn list_subsystems(&self) -> Vec<SubsystemInfo> {
-        self.inner.lock().await.subsystems.list()
+        self.lock_committed().await.subsystems.list()
     }
 
     pub async fn start_subsystem(&self, id: &SubsystemId) -> Result<()> {
         let (spec, flag, session) = {
-            let mut inner = self.inner.lock().await;
+            let mut inner = self.lock_committed().await;
             require_unlocked(&inner)?;
             let session = inner.access.admin_session_id()?;
             let (spec, flag) = inner
@@ -2212,7 +2312,7 @@ impl Runtime {
                 tokio::time::sleep(interval(&spec)).await;
             }
         });
-        self.inner.lock().await.subsystems.attach_handle(id, handle);
+        self.lock_committed().await.subsystems.attach_handle(id, handle);
         Ok(())
     }
 
@@ -2936,7 +3036,8 @@ fn consume_next(inner: &mut RuntimeInner, sub: &Subscription) -> Result<Option<D
             .get(&sub.id)
             .and_then(|p| p.pending.clone());
         if let Some(pending) = pending {
-            let entry = matching_entries(inner, sub, pending.sequence.saturating_sub(1), None)?
+            // The first matching entry after `sequence - 1` is the pending one if it exists.
+            let entry = matching_entries(inner, sub, pending.sequence.saturating_sub(1), Some(1))?
                 .into_iter()
                 .find(|e| e.sequence == pending.sequence)
                 .ok_or_else(|| {
@@ -2978,12 +3079,23 @@ fn consume_next(inner: &mut RuntimeInner, sub: &Subscription) -> Result<Option<D
             .map(|p| p.offset)
             .unwrap_or(sub.position.sequence);
         let dead = dlq::dead_sequences(&inner.overlay, &sub.id);
-        let mut found = matching_entries(inner, sub, offset, None)?;
-        found.retain(|e| !dead.contains(&e.sequence));
-        if found.is_empty() {
+        // Page forward instead of decrypting the whole backlog: first non-dead match wins.
+        const PAGE: usize = 64;
+        let mut from = offset;
+        let entry = loop {
+            let page = matching_entries(inner, sub, from, Some(PAGE))?;
+            let exhausted = page.len() < PAGE;
+            from = page.last().map_or(from, |e| e.sequence);
+            if let Some(e) = page.into_iter().find(|e| !dead.contains(&e.sequence)) {
+                break Some(e);
+            }
+            if exhausted {
+                break None;
+            }
+        };
+        let Some(entry) = entry else {
             return Ok(None);
-        }
-        let entry = found.remove(0);
+        };
         if let Err(e) = validate_subscription_capability(inner, sub, Some(&entry.path)) {
             return Err(Error::AuthorizationDenied(e.to_string()));
         }
@@ -3138,18 +3250,32 @@ fn persist_checkpoint(inner: &mut RuntimeInner) -> Result<()> {
     Ok(())
 }
 
-fn journal_mutation(
+/// A journal entry appended (not yet fsynced) plus everything needed to apply and publish it
+/// once durable. Shared by the synchronous mutation path and group commit.
+struct StagedMutation {
+    entry: JournalEntry,
+    session: SessionId,
+    role: String,
+    path: String,
+    op: &'static str,
+    kind: EventKind,
+    event_payload: Vec<u8>,
+    source_stream: Option<StreamId>,
+    event_id: String,
+}
+
+fn stage_mutation(
     inner: &mut RuntimeInner,
     session: &SessionId,
     key_path: &KeyPath,
     event_kind: JournalEventKind,
     operation: Operation,
     payload: Vec<u8>,
-    op: &str,
+    op: &'static str,
     kind: EventKind,
     event_payload: Vec<u8>,
     source_stream: Option<StreamId>,
-) -> Result<JournalRef> {
+) -> Result<StagedMutation> {
     let role = inner.access.session(session)?.role_id.clone();
     let kv = inner.kv.as_mut().ok_or(Error::Locked)?;
     if !key_path.is_root() {
@@ -3177,7 +3303,6 @@ fn journal_mutation(
     let r = journal
         .append(draft, &dek)
         .map_err(|e| Error::Invalid(e.to_string()))?;
-    journal.sync().map_err(|e| Error::Invalid(e.to_string()))?;
     let entry = JournalEntry {
         sequence: r.sequence,
         event_id: r.event_id,
@@ -3191,24 +3316,199 @@ fn journal_mutation(
         node_bundle: Vec::new(),
         payload,
     };
-    apply_live(inner, &entry, ApplyMode::Live)?;
-    finish_event(
-        inner,
-        session,
-        &role,
-        &key_path.to_string().trim_start_matches('/').to_string(),
+    Ok(StagedMutation {
+        event_id: event_id_hex(&r.event_id),
+        entry,
+        session: session.clone(),
+        role,
+        path: key_path.to_string().trim_start_matches('/').to_string(),
         op,
         kind,
         event_payload,
         source_stream,
-        &event_id_hex(&r.event_id),
-        r.sequence,
-        key_version,
+    })
+}
+
+/// Apply a durable staged entry to in-memory state and publish its event / triggers.
+fn finish_mutation(inner: &mut RuntimeInner, staged: StagedMutation) -> Result<JournalRef> {
+    apply_live(inner, &staged.entry, ApplyMode::Live)?;
+    finish_event(
+        inner,
+        &staged.session,
+        &staged.role,
+        &staged.path,
+        staged.op,
+        staged.kind,
+        staged.event_payload,
+        staged.source_stream,
+        &staged.event_id,
+        staged.entry.sequence,
+        staged.entry.key_version,
     )?;
     Ok(JournalRef {
-        sequence: r.sequence,
-        event_id: event_id_hex(&r.event_id),
+        sequence: staged.entry.sequence,
+        event_id: staged.event_id,
     })
+}
+
+fn journal_mutation(
+    inner: &mut RuntimeInner,
+    session: &SessionId,
+    key_path: &KeyPath,
+    event_kind: JournalEventKind,
+    operation: Operation,
+    payload: Vec<u8>,
+    op: &'static str,
+    kind: EventKind,
+    event_payload: Vec<u8>,
+    source_stream: Option<StreamId>,
+) -> Result<JournalRef> {
+    let staged = stage_mutation(
+        inner,
+        session,
+        key_path,
+        event_kind,
+        operation,
+        payload,
+        op,
+        kind,
+        event_payload,
+        source_stream,
+    )?;
+    let journal = inner.journal.as_mut().ok_or(Error::Locked)?;
+    journal.sync().map_err(|e| Error::Invalid(e.to_string()))?;
+    finish_mutation(inner, staged)
+}
+
+fn start_leader(inner: &mut RuntimeInner) -> bool {
+    if inner.group_leader_active {
+        return false;
+    }
+    inner.group_leader_active = true;
+    true
+}
+
+/// Group-commit leader: repeatedly fsync everything appended so far without holding the
+/// runtime lock, then apply + acknowledge the covered prefix in sequence order. Runs as its
+/// own task so a cancelled caller cannot strand other writers.
+async fn group_commit_loop(shared: Arc<Mutex<RuntimeInner>>) {
+    loop {
+        let mut inner = shared.lock().await;
+        if inner.pending_puts.is_empty() {
+            inner.group_leader_active = false;
+            return;
+        }
+        let begun = match inner.journal.as_mut() {
+            Some(j) => j.begin_group_sync().map_err(Error::from),
+            None => Err(Error::Locked),
+        };
+        match begun {
+            Ok(Some(sync)) => {
+                drop(inner);
+                let target = sync.target();
+                let outcome = tokio::task::spawn_blocking(move || sync.run())
+                    .await
+                    .unwrap_or_else(|e| {
+                        Err(dmc_journal::Error::format(format!("fsync task failed: {e}")))
+                    });
+                let mut inner = shared.lock().await;
+                let completed = match inner.journal.as_mut() {
+                    Some(j) => j.complete_group_sync(target, outcome).map_err(Error::from),
+                    None => Err(Error::Locked),
+                };
+                match completed {
+                    Ok(()) => commit_pending_puts(&mut inner, target),
+                    Err(e) => fail_pending_puts(&mut inner, &e),
+                }
+            }
+            // Topology changed (new segment): full sync incl. meta + directories, under lock.
+            Ok(None) => commit_barrier(&mut inner),
+            Err(e) => fail_pending_puts(&mut inner, &e),
+        }
+    }
+}
+
+/// Make every pending put durable now (synchronous fsync under the lock) and acknowledge it.
+fn commit_barrier(inner: &mut RuntimeInner) {
+    if inner.pending_puts.is_empty() {
+        return;
+    }
+    let synced = match inner.journal.as_mut() {
+        Some(j) => j.sync().map(|_| j.last_sequence()).map_err(Error::from),
+        None => Err(Error::Locked),
+    };
+    match synced {
+        Ok(through) => commit_pending_puts(inner, through),
+        Err(e) => fail_pending_puts(inner, &e),
+    }
+}
+
+/// Apply and acknowledge pending puts with `sequence <= through` (all durable), in order.
+fn commit_pending_puts(inner: &mut RuntimeInner, through: u64) {
+    let mut done = Vec::new();
+    let mut remembered = false;
+    while inner
+        .pending_puts
+        .front()
+        .is_some_and(|p| p.staged.entry.sequence <= through)
+    {
+        let Some(p) = inner.pending_puts.pop_front() else {
+            break;
+        };
+        let applied = finish_mutation(inner, p.staged);
+        if let (Ok(r), Some((producer_id, key))) = (applied.as_ref(), p.idempotency.as_ref()) {
+            let now = consumer_now_ms(inner);
+            inner.producer_meta.remember(
+                producer_id,
+                key,
+                r.event_id.clone(),
+                r.sequence,
+                p.raw_path.clone(),
+                now,
+            );
+            remembered = true;
+        }
+        done.push((applied, p.idempotency.is_some(), p.waiter, p.followers, p._permit));
+    }
+    // One producer-metadata write per batch instead of per put (still before any ACK).
+    let persisted = if remembered {
+        persist_producer_state(inner).map_err(|e| e.to_string())
+    } else {
+        Ok(())
+    };
+    for (applied, idempotent, waiter, followers, permit) in done {
+        let result = match (applied, &persisted) {
+            (Ok(_), Err(e)) if idempotent => Err(Error::Invalid(e.clone())),
+            (Ok(r), _) => Ok(PutResult {
+                event_id: r.event_id,
+                sequence: r.sequence,
+                replay: false,
+            }),
+            (Err(e), _) => Err(e),
+        };
+        for f in followers {
+            let _ = f.send(match &result {
+                Ok(r) => Ok(PutResult {
+                    replay: true,
+                    ..r.clone()
+                }),
+                Err(e) => Err(Error::Invalid(e.to_string())),
+            });
+        }
+        let _ = waiter.send(result);
+        drop(permit);
+    }
+}
+
+/// Fail every pending put: none of them may be acknowledged (journal is poisoned).
+fn fail_pending_puts(inner: &mut RuntimeInner, err: &Error) {
+    let msg = format!("group commit failed: {err}");
+    for p in inner.pending_puts.drain(..) {
+        for f in p.followers {
+            let _ = f.send(Err(Error::Invalid(msg.clone())));
+        }
+        let _ = p.waiter.send(Err(Error::Invalid(msg.clone())));
+    }
 }
 
 fn apply_live(inner: &mut RuntimeInner, entry: &JournalEntry, mode: ApplyMode) -> Result<()> {

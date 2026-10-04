@@ -18,6 +18,14 @@ pub enum CrashPoint {
     AfterManifestTmpFsync,
     BeforeManifestRename,
     AfterManifestRename,
+    /// Rotation: old active segment footer is durable, new segment not yet created.
+    AfterRotationFooter,
+    /// Rotation: new segment file + directory entry durable, manifest not yet published.
+    AfterRotationNewSegment,
+    /// First segment of a partition (manifest exists): header written, not yet fsynced.
+    AfterPartitionSegmentCreate,
+    /// First segment of a partition: file + directory entry durable, manifest not published.
+    AfterPartitionSegmentFsync,
     BeforeGc,
     DuringGcAfterDelete(u64),
     AfterGc,
@@ -60,4 +68,34 @@ pub fn maybe_crash_gc_after_deleted(segment_id: u64) -> Result<()> {
             Ok(())
         }
     })
+}
+
+static FAIL_FSYNC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Test hook (process-wide, unlike crash points: group-commit fsync runs on a blocking-pool
+/// thread): while set, every journal data fsync fails as if the device returned EIO.
+pub fn set_test_fail_fsync(fail: bool) {
+    FAIL_FSYNC.store(fail, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub(crate) fn maybe_fail_fsync() -> Result<()> {
+    if FAIL_FSYNC.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(Error::format("simulated fsync failure"));
+    }
+    Ok(())
+}
+
+static GROUP_SYNC_DELAY_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Test hook (process-wide): stall every group-commit fsync by `ms` milliseconds, to force
+/// deterministic interleavings with operations that run while a batch is in flight.
+pub fn set_test_group_sync_delay_ms(ms: u64) {
+    GROUP_SYNC_DELAY_MS.store(ms, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub(crate) fn maybe_delay_group_sync() {
+    let ms = GROUP_SYNC_DELAY_MS.load(std::sync::atomic::Ordering::SeqCst);
+    if ms > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
 }

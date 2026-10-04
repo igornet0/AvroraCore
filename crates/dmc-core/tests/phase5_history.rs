@@ -72,6 +72,23 @@ async fn unlock_fresh(dir: &std::path::Path, master: &str) -> Runtime {
     rt
 }
 
+/// Simulated external GC of the first sealed segment while the runtime is locked: a forced
+/// `trim_through` on the journal itself (bypasses runtime retention pins, like the previous
+/// raw file removal) that also removes the segment from the published manifest.
+fn force_gc_first_segment(db_path: &std::path::Path, master: &str, first_bytes: &[u8]) {
+    let layout = StorageLayout::from_db_path(db_path);
+    let snap = dmc_vault::persist::DbSnapshot::load(&layout.base_snapshot()).unwrap();
+    let salt = snap.salt().unwrap();
+    let master_key = dmc_vault::KeyMaterial::from_hex(master).unwrap();
+    let kek = dmc_vault::crypto::derive_journal_kek(&master_key, &salt);
+    let mut journal =
+        dmc_journal::Journal::open(dmc_journal::JournalConfig::new(layout.journal_dir()), &kek)
+            .unwrap();
+    let (end, _) = decode_segment_footer(first_bytes).unwrap();
+    let trimmed = journal.trim_through(end).unwrap();
+    assert!(!trimmed.deleted_segments.is_empty(), "forced GC deleted nothing");
+}
+
 async fn bump_oldest_available(
     dir: &std::path::Path,
     master: &str,
@@ -92,7 +109,7 @@ async fn bump_oldest_available(
         "first segment must be sealed before simulated GC"
     );
     rt.lock().await.unwrap();
-    std::fs::remove_file(&first).unwrap();
+    force_gc_first_segment(&dir.join("store.dbs.json"), master, &bytes);
     let rt2 = unlock_fresh(dir, master).await;
     let oldest = rt2.oldest_available_sequence().await.unwrap();
     assert!(oldest > 1, "oldest={oldest} after removing seg {}", ids[0]);

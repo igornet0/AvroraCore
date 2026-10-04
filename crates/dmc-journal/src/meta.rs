@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -56,7 +57,12 @@ impl JournalMeta {
         }
         let tmp = path.with_extension("tmp");
         let raw = serde_json::to_string_pretty(self).map_err(|e| Error::format(e))?;
-        fs::write(&tmp, raw).map_err(Error::io)?;
+        {
+            // fsync contents before the rename so a crash can never publish a torn meta file.
+            let mut f = fs::File::create(&tmp).map_err(Error::io)?;
+            f.write_all(raw.as_bytes()).map_err(Error::io)?;
+            f.sync_all().map_err(Error::io)?;
+        }
         fs::rename(&tmp, path).map_err(Error::io)?;
         Ok(())
     }

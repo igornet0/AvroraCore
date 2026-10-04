@@ -486,15 +486,10 @@ pub fn manifest_v2_from_segment_infos(
             .copied()
             .unwrap_or(PartitionId(0))
             .as_u32();
-        by_partition.entry(pid).or_default().push(SegmentManifestEntry {
-            segment_id: info.id,
-            start_sequence: info.start_sequence,
-            end_sequence: info.end_sequence,
-            start_timestamp_unix_ms: info.first_timestamp_unix_ms.unwrap_or(0),
-            end_timestamp_unix_ms: info.last_timestamp_unix_ms.unwrap_or(0),
-            byte_size: info.byte_size,
-            state: info.state,
-        });
+        by_partition
+            .entry(pid)
+            .or_default()
+            .push(segment_manifest_entry(info));
     }
     let mut partitions = Vec::new();
     for pid in 0..partition_count.max(1) {
@@ -511,6 +506,204 @@ pub fn manifest_v2_from_segment_infos(
         partition_count: partition_count.max(1),
         partitions,
         superseded_segment_ids: Vec::new(),
+    }
+}
+
+/// Manifest entry for a segment as observed on disk.
+///
+/// An active segment without entries yet is recorded with `end_sequence = start_sequence - 1`
+/// (the empty-active convention accepted by `segment_sequence_bounds_valid`).
+pub fn segment_manifest_entry(info: &JournalSegmentInfo) -> SegmentManifestEntry {
+    let end_sequence =
+        if info.state == SegmentState::Active && info.end_sequence < info.start_sequence {
+            info.start_sequence.saturating_sub(1)
+        } else {
+            info.end_sequence
+        };
+    SegmentManifestEntry {
+        segment_id: info.id,
+        start_sequence: info.start_sequence,
+        end_sequence,
+        start_timestamp_unix_ms: info.first_timestamp_unix_ms.unwrap_or(0),
+        end_timestamp_unix_ms: info.last_timestamp_unix_ms.unwrap_or(0),
+        byte_size: info.byte_size,
+        state: info.state,
+    }
+}
+
+/// Next manifest generation after rotating `partition_id`: the manifest's active segment
+/// becomes `sealed` and `active` is appended as the partition's new active segment.
+///
+/// Fails closed unless `current` lists `sealed.segment_id` as the partition's active segment
+/// and does not already know `active.segment_id`.
+pub fn build_rotation_manifest(
+    current: &StoredJournalManifest,
+    partition_id: PartitionId,
+    sealed: SegmentManifestEntry,
+    active: SegmentManifestEntry,
+) -> Result<StoredJournalManifest> {
+    if sealed.state != SegmentState::Sealed || active.state != SegmentState::Active {
+        return Err(Error::JournalManifestInconsistent(
+            "rotation requires sealed + active segment entries".into(),
+        ));
+    }
+    let rotate = |segments: &mut Vec<SegmentManifestEntry>| -> Result<()> {
+        let idx = segments
+            .iter()
+            .position(|e| e.segment_id == sealed.segment_id && e.state == SegmentState::Active)
+            .ok_or_else(|| {
+                Error::JournalManifestInconsistent(format!(
+                    "rotation: segment {} is not the manifest active segment",
+                    sealed.segment_id
+                ))
+            })?;
+        if segments.iter().any(|e| e.segment_id == active.segment_id) {
+            return Err(Error::JournalManifestInconsistent(format!(
+                "rotation: segment {} already in manifest",
+                active.segment_id
+            )));
+        }
+        segments[idx] = sealed.clone();
+        segments.push(active.clone());
+        segments.sort_by_key(|e| e.start_sequence);
+        Ok(())
+    };
+    match current {
+        StoredJournalManifest::V1(m) => {
+            if partition_id.as_u32() != 0 {
+                return Err(Error::JournalManifestInconsistent(
+                    "v1 manifest has only partition 0".into(),
+                ));
+            }
+            let mut next = m.clone();
+            rotate(&mut next.segments)?;
+            next.generation = m.generation.saturating_add(1);
+            Ok(StoredJournalManifest::V1(next))
+        }
+        StoredJournalManifest::V2(m) => {
+            let mut next = m.clone();
+            let part = next
+                .partitions
+                .iter_mut()
+                .find(|p| p.partition_id == partition_id.as_u32())
+                .ok_or_else(|| {
+                    Error::JournalManifestInconsistent(format!(
+                        "rotation: partition {} missing from manifest",
+                        partition_id.as_u32()
+                    ))
+                })?;
+            rotate(&mut part.segments)?;
+            next.generation = m.generation.saturating_add(1);
+            Ok(StoredJournalManifest::V2(next))
+        }
+    }
+}
+
+/// Next manifest generation after creating the first segment of `partition_id`: `active` is
+/// added as that partition's active segment.
+///
+/// Fails closed unless the manifest is V2, the partition exists and has no active segment,
+/// and `active.segment_id` is not yet known.
+pub fn build_partition_segment_manifest(
+    current: &StoredJournalManifest,
+    partition_id: PartitionId,
+    active: SegmentManifestEntry,
+) -> Result<StoredJournalManifest> {
+    if active.state != SegmentState::Active {
+        return Err(Error::JournalManifestInconsistent(
+            "new partition segment must be active".into(),
+        ));
+    }
+    let StoredJournalManifest::V2(m) = current else {
+        return Err(Error::JournalManifestInconsistent(
+            "partition segment publication requires a v2 manifest".into(),
+        ));
+    };
+    if m.contains_segment(active.segment_id) {
+        return Err(Error::JournalManifestInconsistent(format!(
+            "segment {} already in manifest",
+            active.segment_id
+        )));
+    }
+    let mut next = m.clone();
+    let part = next
+        .partitions
+        .iter_mut()
+        .find(|p| p.partition_id == partition_id.as_u32())
+        .ok_or_else(|| {
+            Error::JournalManifestInconsistent(format!(
+                "partition {} missing from manifest",
+                partition_id.as_u32()
+            ))
+        })?;
+    if part
+        .segments
+        .iter()
+        .any(|e| e.state == SegmentState::Active)
+    {
+        return Err(Error::JournalManifestInconsistent(format!(
+            "partition {} already has an active segment",
+            partition_id.as_u32()
+        )));
+    }
+    part.segments.push(active);
+    part.segments.sort_by_key(|e| e.start_sequence);
+    next.generation = m.generation.saturating_add(1);
+    Ok(StoredJournalManifest::V2(next))
+}
+
+/// Next manifest generation for retention GC: `trimmed` sealed segments leave the
+/// authoritative topology and are recorded in `superseded_segment_ids`, so a crash before their
+/// files are deleted leaves them as obsolete (later GC removes them) instead of authoritative
+/// entries pointing at missing files. Superseded ids whose files no longer exist are dropped
+/// (`file_exists`), keeping the list bounded.
+///
+/// Fails closed unless every trimmed id is a sealed segment of `current`.
+pub fn build_trim_manifest(
+    current: &StoredJournalManifest,
+    trimmed: &[u64],
+    file_exists: impl Fn(u64) -> bool,
+) -> Result<StoredJournalManifest> {
+    let trimmed: HashSet<u64> = trimmed.iter().copied().collect();
+    for id in &trimmed {
+        let sealed = current
+            .all_segments()
+            .iter()
+            .any(|(_, e)| e.segment_id == *id && e.state == SegmentState::Sealed);
+        if !sealed {
+            return Err(Error::JournalManifestInconsistent(format!(
+                "trim: segment {id} is not a sealed manifest segment"
+            )));
+        }
+    }
+    let superseded = |old: &[u64]| -> Vec<u64> {
+        let mut ids: Vec<u64> = old
+            .iter()
+            .copied()
+            .filter(|id| !trimmed.contains(id) && file_exists(*id))
+            .collect();
+        ids.extend(trimmed.iter().copied());
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    };
+    match current {
+        StoredJournalManifest::V1(m) => {
+            let mut next = m.clone();
+            next.segments.retain(|e| !trimmed.contains(&e.segment_id));
+            next.superseded_segment_ids = superseded(&m.superseded_segment_ids);
+            next.generation = m.generation.saturating_add(1);
+            Ok(StoredJournalManifest::V1(next))
+        }
+        StoredJournalManifest::V2(m) => {
+            let mut next = m.clone();
+            for part in &mut next.partitions {
+                part.segments.retain(|e| !trimmed.contains(&e.segment_id));
+            }
+            next.superseded_segment_ids = superseded(&m.superseded_segment_ids);
+            next.generation = m.generation.saturating_add(1);
+            Ok(StoredJournalManifest::V2(next))
+        }
     }
 }
 

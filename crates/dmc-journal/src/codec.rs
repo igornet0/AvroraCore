@@ -340,6 +340,57 @@ pub fn validate_sealed_segment(
     Ok((header.first_sequence, last_sequence, entry_count, records))
 }
 
+/// Like [`scan_segment`], but fully parses only records with `sequence > from_exclusive`.
+///
+/// Every record is still length- and CRC-checked and the scan stops at the same point as
+/// `scan_segment` (first truncated / CRC-invalid record). Records at or below
+/// `from_exclusive` are skipped after reading their sequence (fixed offset in the body),
+/// avoiding the node-bundle JSON parse that dominates reader CPU. Sequences must strictly
+/// increase across all records (skipped or not), otherwise `JournalSequenceConflict`.
+pub fn scan_segment_after(bytes: &[u8], from_exclusive: u64) -> Result<Vec<ScannedEntry>> {
+    if bytes.len() < SEGMENT_HEADER_LEN {
+        return Err(Error::format("segment shorter than header"));
+    }
+    decode_segment_header(&bytes[..SEGMENT_HEADER_LEN])?;
+    let mut offset = SEGMENT_HEADER_LEN;
+    let mut entries = Vec::new();
+    let mut prev: Option<u64> = None;
+    while offset + 4 <= bytes.len() {
+        let entry_len = u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+        if offset + 4 + entry_len > bytes.len() {
+            break;
+        }
+        if entry_len < 4 {
+            break;
+        }
+        let crc_stored = u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap());
+        let body = &bytes[offset + 8..offset + 4 + entry_len];
+        if crc32c::crc32c(body) != crc_stored {
+            break;
+        }
+        if body.len() < ENTRY_PREFIX_LEN + 4 + 12 {
+            break;
+        }
+        let sequence = u64::from_le_bytes(body[0..8].try_into().unwrap());
+        if let Some(p) = prev {
+            if sequence <= p {
+                return Err(Error::JournalSequenceConflict(format!(
+                    "non-monotonic sequence {sequence} after {p}"
+                )));
+            }
+        }
+        prev = Some(sequence);
+        if sequence > from_exclusive {
+            match parse_entry_body(body) {
+                Ok(scanned) => entries.push(scanned),
+                Err(_) => break,
+            }
+        }
+        offset += 4 + entry_len;
+    }
+    Ok(entries)
+}
+
 /// Scan a segment file. Returns valid prefix length (from file start) and entries.
 pub fn scan_segment(bytes: &[u8]) -> Result<(usize, Vec<ScannedEntry>, u64)> {
     if bytes.len() < SEGMENT_HEADER_LEN {
