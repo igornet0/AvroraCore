@@ -1,10 +1,18 @@
 //! Phase 7.10.5 — Recovery-on-startup (ADR-024 `recover` via `start_core`).
+//!
+//! D4-A stage 4.6 contract: `start_core` never recovers (it would read SQL data while the
+//! vault is locked); it checks the restore metadata, starts Ready + Locked with
+//! `recovery_required`, and the recovery runs on the first successful `VaultUnlock`.
+//!
+//! D4-A final switch: SQL storage is encrypted-only, so fixtures are encrypted backups of a
+//! source installation whose key store travels with the restore (plaintext backups are
+//! refused at startup — see `plaintext_backup_is_refused_at_startup`).
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use dmc_backup::{
-    live_paths, restore_backup, BackupCoordinator, BackupRequest, CatalogArtifact, RecoveryGate,
+    live_paths, restore_backup, restore_backup_registered, BackupCoordinator, BackupRequest, JournalArtifact, RecoveryGate,
     RecoveryState, RecoveryStateFile, MANIFEST_FILE,
 };
 use dmc_materialized::StateMaterializer;
@@ -21,7 +29,7 @@ use dmc_protocol::{
 use dmc_security::auth::{Action, Resource};
 use dmc_server::{
     create_unlock_blob, expect_ok_control, expect_ok_data, handle_control, handle_data,
-    CoreServerState, MockKeyPassProvider, UnlockMaterial,
+    CoreServerState, MockKeyPassProvider, UnlockMaterial, KEY_TREE_FILE,
 };
 use dmc_sql_bind::bind_sql;
 use dmc_sql_exec::{execute_bound_statement, execute_plan, ExecutionContext, JournalBackend};
@@ -68,7 +76,10 @@ fn users_columns() -> Vec<ColumnDef> {
     ]
 }
 
-fn bootstrap_journal(root: &Path) -> (Catalog, ExecutionContext) {
+fn bootstrap_journal(
+    root: &Path,
+    cipher: Option<std::sync::Arc<dmc_vault::StorageCipher>>,
+) -> (Catalog, ExecutionContext) {
     let mut catalog = Catalog::new();
     let mut events = catalog.bootstrap_default().unwrap();
     let schema = catalog.schemas().find(|s| s.name == "public").unwrap().id;
@@ -85,7 +96,7 @@ fn bootstrap_journal(root: &Path) -> (Catalog, ExecutionContext) {
     let snapshot = root.join("materialized_snapshot.json");
     let log = root.join("state_events.json");
     let rows = root.join("rows");
-    let mut mat = StateMaterializer::open(rows, snapshot, log).unwrap();
+    let mut mat = StateMaterializer::open_with_cipher(rows, snapshot, log, cipher).unwrap();
     for event in &events {
         mat.mutate_catalog(event.clone()).unwrap();
     }
@@ -145,23 +156,38 @@ fn request() -> BackupRequest {
     BackupRequest::new("avrora").with_created_at("fixed-timestamp-for-tests")
 }
 
+/// Source installation: its key store and Master Key, and its storage keys.
+fn source_installation(dir: &Path) -> (PathBuf, UnlockMaterial, std::sync::Arc<dmc_vault::StorageCipher>) {
+    let mut src = start_core(cfg_for(&dir.join("src_core")), StartupOptions::production()).unwrap();
+    let master = src.unlock_material.clone().unwrap();
+    src.server.apply_vault_unlock(&master).unwrap();
+    let cipher = std::sync::Arc::new(src.server.unlock_gate.storage_cipher().unwrap());
+    (src.layout.vault_root().join(KEY_TREE_FILE), master, cipher)
+}
+
+/// Encrypted backup of a source installation, restored as a data root together with the
+/// source's key store. Returns (restored root, N, the source's Master Key).
 fn backup_and_restore(
     dir: &Path,
     id: &str,
     setup: impl FnOnce(&mut Catalog, &mut ExecutionContext),
-) -> (PathBuf, u64) {
+) -> (PathBuf, u64, UnlockMaterial) {
+    let (key_store, master, cipher) = source_installation(dir);
     let live = dir.join("live_src");
     let backups = dir.join("backups");
     let restored = dir.join("restored");
     fs::create_dir_all(&live).unwrap();
-    let (mut catalog, mut ctx) = bootstrap_journal(&live);
+    let (mut catalog, mut ctx) = bootstrap_journal(&live, Some(cipher.clone()));
     setup(&mut catalog, &mut ctx);
     let published = with_file_mat(&mut ctx, |m| {
         BackupCoordinator::create_and_publish(m, &request(), &backups, id).unwrap()
     });
     let n = published.manifest.checkpoint_sequence;
-    restore_backup(&published.path, &restored).unwrap();
-    (restored, n)
+    // D4-C: production restore — checked against the source's registry (its live storage)
+    restore_backup_registered(&published.path, &restored, &live.join("rows"), &cipher).unwrap();
+    fs::create_dir_all(restored.join("vault")).unwrap();
+    fs::copy(&key_store, restored.join("vault").join(KEY_TREE_FILE)).unwrap();
+    (restored, n, master)
 }
 
 fn grant_analyst(state: &mut CoreServerState) {
@@ -290,10 +316,20 @@ fn startup_without_recovery_ready_locked() {
     assert!(started.recovery_state.is_none());
 }
 
+/// Locked start leaves the restore target untouched; the automatic recovery runs on unlock.
+fn assert_recovery_pending(started: &dmc_ops::StartedCore, restored: &Path) {
+    assert!(started.recovery_required);
+    assert_eq!(started.recovery_state, Some(RecoveryState::Restored));
+    assert!(started.server.storage_sealed(), "nothing is read before unlock");
+    assert!(!restored.join("live").exists(), "nothing recovered while locked");
+    assert!(!restored.join(".recover").exists());
+    assert!(!restored.join("recovery/state.json").exists());
+}
+
 #[test]
-fn startup_with_recovery_required_runs_automatic_recovery() {
+fn startup_with_recovery_required_recovers_only_on_unlock() {
     let dir = tempdir().unwrap();
-    let (restored, n) = backup_and_restore(dir.path(), "auto", |c, ctx| {
+    let (restored, n, master) = backup_and_restore(dir.path(), "auto", |c, ctx| {
         pipeline(
             c,
             ctx,
@@ -303,21 +339,23 @@ fn startup_with_recovery_required_runs_automatic_recovery() {
     let gate = RecoveryGate::load(&restored).unwrap();
     assert_eq!(gate.state, RecoveryState::Restored);
 
-    let started = start_core(cfg_for(&restored), StartupOptions::production()).unwrap();
+    let mut started = start_core(cfg_for(&restored), StartupOptions::production()).unwrap();
     assert_started_invariants(&started);
-    assert!(!started.recovery_required);
-    assert_eq!(started.recovery_state, Some(RecoveryState::Ready));
-    assert_eq!(
-        RecoveryGate::load(&restored).unwrap().checkpoint_sequence,
-        n
-    );
     assert!(started.vault_locked());
+    assert_recovery_pending(&started, &restored);
+
+    let master = master.clone();
+    started.server.apply_vault_unlock(&master).unwrap();
+    let gate = RecoveryGate::load(&restored).unwrap();
+    assert_eq!(gate.state, RecoveryState::Ready);
+    assert_eq!(gate.checkpoint_sequence, n);
+    assert_eq!(started.server.ctx.journal().unwrap().tip_sequence(), n);
 }
 
 #[test]
 fn recovery_success_ready_locked_sessions_empty() {
     let dir = tempdir().unwrap();
-    let (restored, _) = backup_and_restore(dir.path(), "ok", |c, ctx| {
+    let (restored, _, _master) = backup_and_restore(dir.path(), "ok", |c, ctx| {
         pipeline(
             c,
             ctx,
@@ -357,7 +395,7 @@ fn recovery_failure_yields_failed_not_ready() {
 #[test]
 fn corrupt_artifact_fails_startup() {
     let dir = tempdir().unwrap();
-    let (restored, _) = backup_and_restore(dir.path(), "corrupt", |c, ctx| {
+    let (restored, _, _master) = backup_and_restore(dir.path(), "corrupt", |c, ctx| {
         pipeline(
             c,
             ctx,
@@ -372,29 +410,37 @@ fn corrupt_artifact_fails_startup() {
 }
 
 #[test]
-fn invalid_checkpoint_fails_startup() {
+fn invalid_checkpoint_fails_recovery_on_unlock() {
     let dir = tempdir().unwrap();
-    let (restored, n) = backup_and_restore(dir.path(), "ckpt", |c, ctx| {
+    let (restored, n, master) = backup_and_restore(dir.path(), "ckpt", |c, ctx| {
         pipeline(
             c,
             ctx,
             "INSERT INTO users (id, name, age) VALUES (1, 'A', 1)",
         );
     });
-    let cat_path = restored.join("catalog/catalog.json");
-    let mut cat: CatalogArtifact =
-        serde_json::from_slice(&fs::read(&cat_path).unwrap()).unwrap();
-    cat.checkpoint_sequence = n + 1;
-    fs::write(&cat_path, serde_json::to_vec_pretty(&cat).unwrap()).unwrap();
+    // the catalog is sealed; the journal component metadata carries the checkpoint in clear
+    let jm_path = restored.join("journal/manifest.json");
+    let mut jm: JournalArtifact = serde_json::from_slice(&fs::read(&jm_path).unwrap()).unwrap();
+    jm.checkpoint_sequence = n + 1;
+    fs::write(&jm_path, serde_json::to_vec_pretty(&jm).unwrap()).unwrap();
 
-    let err = start_core(cfg_for(&restored), StartupOptions::production()).unwrap_err();
-    assert!(matches!(err, StartupError::Recovery(_)));
+    // the catalog is SQL data: only checked when recovery runs, after unlock
+    let mut started = start_core(cfg_for(&restored), StartupOptions::production()).unwrap();
+    assert_recovery_pending(&started, &restored);
+    let master = master.clone();
+    assert!(started.server.apply_vault_unlock(&master).is_err());
+    // fail closed: vault locked again, nothing opened, not Ready, no live tree
+    assert!(started.server.storage_sealed());
+    assert!(!started.server.root_dek_present());
+    assert!(!RecoveryGate::load(&restored).unwrap().is_ready());
+    assert!(!restored.join("live").exists());
 }
 
 #[test]
 fn recovery_idempotent_no_second_destructive_rebuild() {
     let dir = tempdir().unwrap();
-    let (restored, _) = backup_and_restore(dir.path(), "idem", |c, ctx| {
+    let (restored, _, master) = backup_and_restore(dir.path(), "idem", |c, ctx| {
         pipeline(
             c,
             ctx,
@@ -402,16 +448,21 @@ fn recovery_idempotent_no_second_destructive_rebuild() {
         );
     });
 
-    let first = start_core(cfg_for(&restored), StartupOptions::production()).unwrap();
-    assert_eq!(first.recovery_state, Some(RecoveryState::Ready));
+    let mut first = start_core(cfg_for(&restored), StartupOptions::production()).unwrap();
+    assert_recovery_pending(&first, &restored);
+    let master = master.clone();
+    first.server.apply_vault_unlock(&master).unwrap();
+    assert!(RecoveryGate::load(&restored).unwrap().is_ready());
     let tip1 = first.server.ctx.journal().unwrap().tip_sequence();
     let fp1 = live_fingerprint(&restored);
     drop(first);
 
-    let second = start_core(cfg_for(&restored), StartupOptions::production()).unwrap();
+    let mut second = start_core(cfg_for(&restored), StartupOptions::production()).unwrap();
     assert_started_invariants(&second);
     assert!(!second.recovery_required);
     assert_eq!(second.recovery_state, Some(RecoveryState::Ready));
+    assert!(second.server.storage_sealed());
+    second.server.apply_vault_unlock(&master).unwrap();
     let tip2 = second.server.ctx.journal().unwrap().tip_sequence();
     assert_eq!(tip1, tip2);
     assert_eq!(fp1, live_fingerprint(&restored));
@@ -421,14 +472,17 @@ fn recovery_idempotent_no_second_destructive_rebuild() {
 #[test]
 fn restart_after_recovery_ready_locked() {
     let dir = tempdir().unwrap();
-    let (restored, _) = backup_and_restore(dir.path(), "restart", |c, ctx| {
+    let (restored, _, master) = backup_and_restore(dir.path(), "restart", |c, ctx| {
         pipeline(
             c,
             ctx,
             "INSERT INTO users (id, name, age) VALUES (2, 'Bob', 22)",
         );
     });
-    let _ = start_core(cfg_for(&restored), StartupOptions::production()).unwrap();
+    let mut first = start_core(cfg_for(&restored), StartupOptions::production()).unwrap();
+    let master = master.clone();
+    first.server.apply_vault_unlock(&master).unwrap();
+    drop(first);
     let again = start_core(cfg_for(&restored), StartupOptions::production()).unwrap();
     assert_started_invariants(&again);
     assert!(!again.recovery_required);
@@ -438,7 +492,7 @@ fn restart_after_recovery_ready_locked() {
 #[test]
 fn manual_fail_does_not_auto_recover() {
     let dir = tempdir().unwrap();
-    let (restored, _) = backup_and_restore(dir.path(), "manual", |c, ctx| {
+    let (restored, _, _master) = backup_and_restore(dir.path(), "manual", |c, ctx| {
         pipeline(
             c,
             ctx,
@@ -482,7 +536,7 @@ fn ready_without_live_fails() {
 #[test]
 fn failing_observability_does_not_change_recovery_outcome() {
     let dir = tempdir().unwrap();
-    let (restored, _) = backup_and_restore(dir.path(), "obs", |c, ctx| {
+    let (restored, _, master) = backup_and_restore(dir.path(), "obs", |c, ctx| {
         pipeline(
             c,
             ctx,
@@ -495,6 +549,8 @@ fn failing_observability_does_not_change_recovery_outcome() {
     first
         .server
         .set_observability(Observability::failing());
+    let master = master.clone();
+    first.server.apply_vault_unlock(&master).unwrap();
     let tip = first.server.ctx.journal().unwrap().tip_sequence();
     drop(first);
 
@@ -504,14 +560,16 @@ fn failing_observability_does_not_change_recovery_outcome() {
         .set_observability(Observability::failing());
     assert_started_invariants(&second);
     assert!(!second.recovery_required);
-    assert_eq!(second.server.ctx.journal().unwrap().tip_sequence(), tip);
     assert!(second.vault_locked());
+    assert!(second.server.storage_sealed());
+    second.server.apply_vault_unlock(&master).unwrap();
+    assert_eq!(second.server.ctx.journal().unwrap().tip_sequence(), tip);
 }
 
 #[test]
 fn sql_before_unlock_vault_locked_after_auth_unlock_works() {
     let dir = tempdir().unwrap();
-    let (restored, _) = backup_and_restore(dir.path(), "sql", |c, ctx| {
+    let (restored, _, master) = backup_and_restore(dir.path(), "sql", |c, ctx| {
         pipeline(
             c,
             ctx,
@@ -543,7 +601,7 @@ fn sql_before_unlock_vault_locked_after_auth_unlock_works() {
         3,
         &sid,
         &binding,
-        &started.unlock_material,
+        &master,
     );
     let ok = expect_ok_data(sql_select(
         &mut started.server,
@@ -562,11 +620,12 @@ fn sql_before_unlock_vault_locked_after_auth_unlock_works() {
     }
 }
 
-/// Acceptance: backup → restore → start_core auto-recover → Ready+Locked → Auth → Unlock → SQL.
+/// Acceptance: backup → restore → start_core (Ready+Locked, recovery pending) → Auth →
+/// Unlock (recover) → SQL.
 #[test]
 fn acceptance_backup_restore_start_recover_auth_unlock_sql() {
     let dir = tempdir().unwrap();
-    let (restored, n) = backup_and_restore(dir.path(), "accept", |c, ctx| {
+    let (restored, n, master) = backup_and_restore(dir.path(), "accept", |c, ctx| {
         pipeline(
             c,
             ctx,
@@ -587,12 +646,7 @@ fn acceptance_backup_restore_start_recover_auth_unlock_sql() {
     assert_eq!(started.lifecycle.state(), LifecycleState::Ready);
     assert!(started.lifecycle.accepts_new_work());
     assert!(started.vault_locked());
-    assert!(!started.recovery_required);
-    assert_eq!(started.recovery_state, Some(RecoveryState::Ready));
-    assert_eq!(
-        started.server.ctx.journal().unwrap().tip_sequence(),
-        n
-    );
+    assert_recovery_pending(&started, &restored);
 
     grant_analyst(&mut started.server);
     let (sid, binding) = auth_pair(&mut started.server, 10);
@@ -601,8 +655,10 @@ fn acceptance_backup_restore_start_recover_auth_unlock_sql() {
         11,
         &sid,
         &binding,
-        &started.unlock_material,
+        &master,
     );
+    assert_eq!(started.server.ctx.journal().unwrap().tip_sequence(), n);
+    assert!(RecoveryGate::load(&restored).unwrap().is_ready());
     let ok = expect_ok_data(sql_select(
         &mut started.server,
         12,
@@ -618,4 +674,33 @@ fn acceptance_backup_restore_start_recover_auth_unlock_sql() {
         }
         other => panic!("sql: {other:?}"),
     }
+}
+
+/// D4-A: a plaintext backup is never recovered into encrypted-only storage implicitly.
+#[test]
+fn plaintext_backup_is_refused_at_startup() {
+    let dir = tempdir().unwrap();
+    let live = dir.path().join("live_src");
+    let backups = dir.path().join("backups");
+    let restored = dir.path().join("restored");
+    fs::create_dir_all(&live).unwrap();
+    let (mut catalog, mut ctx) = bootstrap_journal(&live, None);
+    pipeline(
+        &mut catalog,
+        &mut ctx,
+        "INSERT INTO users (id, name, age) VALUES (1, 'A', 1)",
+    );
+    let published = with_file_mat(&mut ctx, |m| {
+        BackupCoordinator::create_and_publish(m, &request(), &backups, "plain").unwrap()
+    });
+    restore_backup(&published.path, &restored).unwrap();
+    let err = start_core(cfg_for(&restored), StartupOptions::production()).unwrap_err();
+    assert!(matches!(err, StartupError::Storage(_)), "{err}");
+    assert!(err.to_string().contains("explicit migration"));
+    assert_startup_error_clean(&err);
+    assert!(!restored.join("live").exists());
+    assert!(
+        !restored.join("vault").join(KEY_TREE_FILE).exists(),
+        "no key store created for it"
+    );
 }

@@ -35,6 +35,16 @@ pub enum BackupError {
     #[error("backup already exists")]
     AlreadyExists,
 
+    /// D4-A: the artifact is encrypted and the operation needs the storage keys
+    /// (vault unlocked). Never satisfied by reading the artifact as plaintext.
+    #[error("storage keys required: {0}")]
+    KeysRequired(String),
+
+    /// D4-E: the client authorized this backup but also has seen a newer state than its
+    /// (authenticated) checkpoint — an unrequested rollback; nothing is restored.
+    #[error("backup checkpoint {checkpoint} is older than the client's anchor {min_generation}")]
+    OlderThanAnchor { checkpoint: u64, min_generation: u64 },
+
     #[error("internal error")]
     Internal,
 }

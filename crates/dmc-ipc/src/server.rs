@@ -45,6 +45,27 @@ impl CoreServer {
         dmc_server::serve_connection_shared(&mut framed, state, &self.options, &mut conn_limits)
     }
 
+    /// Production accept loop. A **connection-local** error (malformed frame, protocol
+    /// violation, client hang-up, I/O on that socket) is reported through `on_error` and
+    /// the loop keeps accepting — one bad client must not stop the server. Only a failure
+    /// of `accept()` itself (the listening socket) is fatal and returned.
+    pub fn serve_forever_shared(
+        &self,
+        state: &std::sync::Mutex<CoreServerState>,
+        mut on_error: impl FnMut(&dmc_protocol::ProtocolError),
+    ) -> Result<()> {
+        loop {
+            let conn = self.listener.accept()?;
+            let mut framed = FramedConnection::new(conn, self.options.limits.frame);
+            let mut conn_limits = ConnectionLimits::default();
+            if let Err(e) =
+                dmc_server::serve_connection_shared(&mut framed, state, &self.options, &mut conn_limits)
+            {
+                on_error(&e);
+            }
+        }
+    }
+
     pub fn accept_and_serve_one(&self, state: &mut CoreServerState) -> Result<()> {
         let conn = self.listener.accept()?;
         let mut framed = FramedConnection::new(conn, self.options.limits.frame);

@@ -824,13 +824,14 @@ DEK A и recovery code A (в raw/hex/HEX).
 
 | Transport | Auth | Key-mgmt API | CLIENT_OWNED write/read | Capture + scanner | Статус |
 |---|---|---|---|---|---|
-| DMC IPC (Unix socket) | `AuthService` sessions | ✅ | ✅ | ✅ | **пройден** |
-| Control plane (`dmc-ops` / AvroraClient) | event-plane identities, без CLIENT_OWNED subjects | ❌ | ❌ | ❌ | не начат |
-| HTTP adapter (`http_server::run_with_runtime`) | отдельный event-plane `Runtime` | ❌ | ❌ | ❌ | не начат |
-| pgwire (`dmc-pgwire`) | **нет**: `AuthenticationOk` отправляется безусловно, startup params игнорируются (`crates/dmc-pgwire/src/server.rs`) | ❌ | ❌ | ❌ | **заблокирован** — сначала нужна аутентификация |
+| DMC IPC (Unix socket) | Ed25519 challenge–response (D1), сессия привязана к соединению (D5) | ✅ | ✅ | ✅ | реализован |
+| HTTP (`dmc-http-co`, loopback) | Ed25519 + подпись каждого запроса, строгий seq | ✅ | ✅ | ✅ (wire, тела, файлы, логи, audit, backup, restore) | реализован |
+| Control plane (TLS, туннель) | Ed25519 внутри туннеля; device mTLS / access-key не являются CLIENT_OWNED identity | ✅ | ✅ | ✅ (расшифрованные кадры, файлы, логи) | реализован |
+| pgwire (`dmc-pgwire`) | **нет** | ❌ | ❌ | — | **BLOCKED**: D4 gate (`client-owned-authentication.md` §9) |
 
-Транспорты не подключались одновременно: по правилу задачи следующий начинается только
-после полного прохождения предыдущего.
+Подробности контракта: [`client-owned-authentication.md`](client-owned-authentication.md).
+Статус `OPERATOR_BLIND_NOT_PROVEN` сохраняется (pgwire, память процесса, корень authority
+для GRANT).
 
 ### 21.13 Исправленная по пути ошибка (вне ownership, но влияла на безопасность отказа)
 

@@ -7,12 +7,26 @@ edition.workspace = true
 name = "dmc-pgwire"
 path = "src/bin/dmc-pgwire.rs"
 
+# D4 gate reference only (legacy engine); not built by the Dockerfile / Makefile.
+[[bin]]
+name = "dmc-pgwire-legacy-reference"
+path = "src/bin/dmc-pgwire-legacy-reference.rs"
+
 [dependencies]
 dmc-core = { path = "../dmc-core" }
 dmc-sql = { path = "../dmc-sql" }
 dmc-vault = { path = "../dmc-vault" }
+dmc-protocol = { path = "../dmc-protocol" }
+dmc-server = { path = "../dmc-server" }
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 
 [dev-dependencies]
+dmc-backup = { path = "../dmc-backup" }
+dmc-client-crypto = { path = "../dmc-client-crypto" }
+dmc-ops = { path = "../dmc-ops" }
+dmc-security = { path = "../dmc-security" }
 tempfile = "3"
 tokio = { version = "1", features = ["full", "test-util"] }

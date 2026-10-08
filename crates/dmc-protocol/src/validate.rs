@@ -44,6 +44,23 @@ pub fn validate_control_request(body: &ControlRequest, limits: &RemoteLimits) ->
             }
             validate_unlock_blob(blob, limits.max_unlock_blob_size)?;
         }
+        ControlRequest::StorageMigrateEncrypt {
+            blob, session_id, ..
+        } => {
+            if session_id.is_empty() {
+                return Err(ProtocolError::wire(
+                    ProtocolErrorCode::InvalidRequest,
+                    "missing session id",
+                ));
+            }
+            if blob.session_id != *session_id {
+                return Err(ProtocolError::wire(
+                    ProtocolErrorCode::UnlockSessionMismatch,
+                    "unlock blob session mismatch",
+                ));
+            }
+            validate_unlock_blob(blob, limits.max_unlock_blob_size)?;
+        }
         ControlRequest::ClientKeyRegister { session_id, .. }
         | ControlRequest::ClientKeyGet { session_id, .. }
         | ControlRequest::ClientKeyRotate { session_id, .. }
@@ -54,6 +71,9 @@ pub fn validate_control_request(body: &ControlRequest, limits: &RemoteLimits) ->
         | ControlRequest::GrantRevoke { session_id, .. }
         | ControlRequest::SealedColumnDeclare { session_id, .. }
         | ControlRequest::IdentityInviteCreate { session_id, .. }
+        | ControlRequest::PrivilegeGrant { session_id, .. }
+        | ControlRequest::PrivilegeRevoke { session_id, .. }
+        | ControlRequest::PrivilegeList { session_id, .. }
         | ControlRequest::VaultStatus { session_id }
         | ControlRequest::VaultLock { session_id }
         | ControlRequest::Logout { session_id }

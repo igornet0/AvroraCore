@@ -14,6 +14,7 @@ dmc-client = { path = "../dmc-client" }
 dmc-core = { path = "../dmc-core" }
 dmc-ipc = { path = "../dmc-ipc" }
 dmc-ops = { path = "../dmc-ops" }
+dmc-pgwire = { path = "../dmc-pgwire" }
 dmc-security = { path = "../dmc-security" }
 dmc-materialized = { path = "../dmc-materialized" }
 dmc-protocol = { path = "../dmc-protocol" }

@@ -10,7 +10,7 @@ use dmc_core::server as http_server;
 use dmc_ipc::{CoreServer, SocketPathOptions};
 use dmc_ops::{start_core, CoreConfig, StartupOptions};
 use dmc_runtime::RuntimeHub;
-use dmc_server::{bootstrap_core_state_locked_with_hub, UnlockMaterial};
+use dmc_server::UnlockMaterial;
 
 use crate::view::ViewLog;
 
@@ -115,9 +115,14 @@ pub fn spawn_server(
     dev: bool,
     sink: UnlockSink,
     http_addr: Option<SocketAddr>,
+    pgwire_addr: Option<SocketAddr>,
     view: &ViewLog,
 ) -> Result<(thread::JoinHandle<()>, ServeOutcome), String> {
     require_dev_mode(dev, dmc_core::control::dev::dev_mode_enabled())?;
+    if pgwire_addr.is_some() && dev {
+        // the dev bootstrap is not the encrypted reference path: never put pgwire on it
+        return Err("--pgwire is production-only (encrypted SQL plane); not with --dev".into());
+    }
     if dev && !matches!(sink, UnlockSink::DevPlainFile) {
         return Err("--dev uses the dev unlock file; do not combine with --keypass-dir".into());
     }
@@ -131,44 +136,29 @@ pub fn spawn_server(
     let hub = RuntimeHub::new();
 
     let (state, master_file, dev_users) = if dev {
-        let snapshot = data_root.join("materialized_snapshot.json");
-        if snapshot.is_file() {
-            view.line(
-                "serve",
-                "режим --dev: существующий data_root + dev auth (analyst/pw)",
-            );
-            let mut started = start_core(
-                CoreConfig::local_defaults(&data_root),
-                StartupOptions {
-                    bootstrap_empty_catalog: false,
-                    runtime_hub: Some(hub.clone()),
-                },
-            )
-            .map_err(|e| e.to_string())?;
-            *started.server.auth_mut() = dmc_server::dev_auth_service();
-            // Each start creates a fresh vault: the file must hold *this* process' key.
-            let master_path = persist_unlock_material(
-                &data_root,
-                started.unlock_material.clone(),
-                &sink,
-            )?;
-            view.crypto(
-                "Master Key (dev) сохранён в .dmc-dev-master.hex (mode 0600) — только для лаборатории",
-            );
-            (started.server, master_path, true)
-        } else {
-            view.line(
-                "serve",
-                "режим --dev: bootstrap analyst/pw + таблица users",
-            );
-            let (state, master) =
-                bootstrap_core_state_locked_with_hub(&data_root, true, hub.clone());
-            let master_path = persist_unlock_material(&data_root, master, &sink)?;
-            view.crypto(
-                "Master Key (dev) сохранён в .dmc-dev-master.hex (mode 0600) — только для лаборатории",
-            );
-            (state, master_path, true)
-        }
+        // D4-F: the dev server runs the production storage path (`start_core`: persistent
+        // key store, storage opened only on VaultUnlock, sealed at rest); only the demo
+        // credentials, the `users` table and the plaintext dev unlock file are dev-specific.
+        view.line(
+            "serve",
+            "режим --dev: start_core (encrypted storage) + dev auth (analyst/pw) + таблица users",
+        );
+        let mut started = start_core(
+            CoreConfig::local_defaults(&data_root),
+            StartupOptions::dev().with_runtime_hub(hub.clone()),
+        )
+        .map_err(|e| e.to_string())?;
+        *started.server.auth_mut() = dmc_server::dev_auth_service();
+        // The Master Key exists only on the start that created the key store; afterwards
+        // the dev file written then stays valid.
+        let master_path = match started.unlock_material.clone() {
+            Some(m) => persist_unlock_material(&data_root, m, &sink)?,
+            None => Some(data_root.join(DEV_MASTER_FILE)).filter(|p| p.is_file()),
+        };
+        view.crypto(
+            "Master Key (dev) сохранён в .dmc-dev-master.hex (mode 0600) — только для лаборатории",
+        );
+        (started.server, master_path, true)
     } else {
         view.line(
             "serve",
@@ -179,18 +169,21 @@ pub fn spawn_server(
             StartupOptions::production().with_runtime_hub(hub.clone()),
         )
         .map_err(|e| e.to_string())?;
-        let written = persist_unlock_material(
-            &data_root,
-            started.unlock_material.clone(),
-            &sink,
-        )?;
-        match &written {
-            Some(dir) => view.crypto(format!(
+        let created = started.unlock_material.is_some();
+        let written = match started.unlock_material.clone() {
+            Some(m) => persist_unlock_material(&data_root, m, &sink)?,
+            None => None,
+        };
+        match (&written, created) {
+            (Some(dir), _) => view.crypto(format!(
                 "unlock material → KeyPass {} (Argon2id-wrapped, plaintext не сохраняется)",
                 dir.display()
             )),
-            None => view.crypto(
+            (None, true) => view.crypto(
                 "unlock material не сохранён (нет --keypass-dir): vault останется Locked",
+            ),
+            (None, false) => view.crypto(
+                "key store exists: unlock with the Master Key / KeyPass issued when it was created",
             ),
         }
         (started.server, written, false)
@@ -203,6 +196,18 @@ pub fn spawn_server(
     }
 
     let state = Arc::new(Mutex::new(state));
+    if let Some(addr) = pgwire_addr {
+        // the same shared state as DMC IPC: same vault, AuthService, grants, storage
+        let (bound, _) =
+            dmc_pgwire::spawn(addr, Arc::clone(&state)).map_err(|e| format!("pgwire: {e}"))?;
+        view.line(
+            "serve",
+            format!(
+                "pgwire (SQL plane, SASL {}) on {bound}",
+                dmc_pgwire::MECHANISM
+            ),
+        );
+    }
     let socket_clone = socket.clone();
     let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
     let handle = thread::spawn(move || {
@@ -216,11 +221,11 @@ pub fn spawn_server(
         if ready_tx.send(Ok(())).is_err() {
             return;
         }
-        // Per-request locking: the HTTP adapter shares this state (D3).
-        loop {
-            if server.accept_and_serve_shared(&state).is_err() {
-                break;
-            }
+        // Per-request locking: the HTTP adapter shares this state (D3). A failing client
+        // connection is logged and the server keeps accepting; only a broken listener ends
+        // the loop.
+        if let Err(e) = server.serve_forever_shared(&state, |e| eprintln!("dmc serve: connection closed with error: {e}")) {
+            eprintln!("dmc serve: listener failed, IPC server stopping: {e}");
         }
     });
 

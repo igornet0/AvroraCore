@@ -10,6 +10,7 @@ dmc-protocol = { path = "../dmc-protocol" }
 dmc-vault = { path = "../dmc-vault" }
 dmc-remote = { path = "../dmc-remote" }
 dmc-server = { path = "../dmc-server" }
+hex = "0.4"
 thiserror = "2"
 zeroize = { version = "1", features = ["derive"] }
 

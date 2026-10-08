@@ -92,6 +92,60 @@ impl Session {
         Ok(state)
     }
 
+    /// D4-A stage 5: explicit storage migration (plaintext pre-D4 store → encrypted).
+    pub fn storage_migrate_keypass(
+        &mut self,
+        dir: &Path,
+        password: &str,
+        purge_plaintext_backups: bool,
+    ) -> Result<(u64, u64, u64), String> {
+        let handle = KeyPassHandle::load_from_dir(dir).map_err(|e| e.to_string())?;
+        self.view
+            .protocol_send("ControlRequest::StorageMigrateEncrypt", "blob=<AEAD sealed>");
+        let out = handle
+            .storage_migrate_encrypt(&mut self.client.control(), password, purge_plaintext_backups)
+            .map_err(|e| e.to_string())?;
+        self.view
+            .protocol_recv("StorageMigrateEncrypt", format!("{out:?}"));
+        Ok(out)
+    }
+
+    /// D4-D: explicit acceptance of older storage (anchor reset).
+    pub fn vault_unlock_keypass_accepting_rollback(
+        &mut self,
+        dir: &Path,
+        password: &str,
+    ) -> Result<(VaultState, u64), String> {
+        let handle = KeyPassHandle::load_from_dir(dir).map_err(|e| e.to_string())?;
+        handle
+            .vault_unlock_accepting_rollback(&mut self.client.control(), password)
+            .map_err(|e| e.to_string())
+    }
+
+    /// D4-E: emergency restore of exactly the backup in the client's backup anchor.
+    pub fn vault_unlock_keypass_restoring_backup(
+        &mut self,
+        dir: &Path,
+        password: &str,
+    ) -> Result<(VaultState, u64), String> {
+        let handle = KeyPassHandle::load_from_dir(dir).map_err(|e| e.to_string())?;
+        self.view
+            .protocol_send("ControlRequest::VaultUnlock", "blob=<AEAD sealed, v3 restore>");
+        handle
+            .vault_unlock_restoring_backup(&mut self.client.control(), password)
+            .map_err(|e| e.to_string())
+    }
+
+    /// D4-E: record a backup this client created as its backup anchor.
+    pub fn record_backup_anchor(
+        &mut self,
+        dir: &Path,
+        created: &dmc_client::BackupCreateResult,
+    ) -> Result<bool, String> {
+        let handle = KeyPassHandle::load_from_dir(dir).map_err(|e| e.to_string())?;
+        handle.record_backup(created).map_err(|e| e.to_string())
+    }
+
     pub fn vault_lock(&mut self) -> Result<VaultState, String> {
         self.view.protocol_send("ControlRequest::VaultLock", "");
         let state = self.client.control().vault_lock().map_err(|e| e.to_string())?;

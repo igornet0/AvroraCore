@@ -67,6 +67,8 @@ pub enum Action {
     Delete,
     Create,
     Drop,
+    /// Assign / revoke privileges of other identities (only meaningful on `System`).
+    Grant,
 }
 
 impl fmt::Display for Action {
@@ -80,6 +82,7 @@ impl fmt::Display for Action {
             Self::Delete => "DELETE",
             Self::Create => "CREATE",
             Self::Drop => "DROP",
+            Self::Grant => "GRANT",
         };
         f.write_str(s)
     }

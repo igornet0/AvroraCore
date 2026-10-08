@@ -36,7 +36,7 @@ members = [
 
 [workspace.package]
 name = "avrora-core"
-version = "0.0.4"
+version = "0.1.1"
 edition = "2024"
 description = "Avrora Core — ядро высокопроизводительной СУБД с поддержкой транзакций, расширяемости и современных SQL-функций."
 license = "MIT"

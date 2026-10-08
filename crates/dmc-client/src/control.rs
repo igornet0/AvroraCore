@@ -1,7 +1,9 @@
 use dmc_protocol::{
     ControlRequest, ControlResponse, ProtocolError, ProtocolErrorCode, ResponseStatus,
 };
-use dmc_server::{create_unlock_blob, expect_ok_control, KeyPassProvider};
+use dmc_server::{
+    create_unlock_blob_anchored, create_unlock_blob_restore, expect_ok_control, KeyPassProvider,
+};
 
 use crate::client::Client;
 use crate::error::{ClientError, Result};
@@ -68,14 +70,58 @@ impl ControlClient<'_> {
     }
 
     pub fn vault_status(&mut self) -> Result<VaultState> {
+        self.vault_status_generation().map(|(state, _)| state)
+    }
+
+    /// Vault state and (D4-D) the generation of the open storage — the client's anchor.
+    pub fn vault_status_generation(&mut self) -> Result<(VaultState, u64)> {
         let session_id = self.client.session.require_session()?.to_string();
         let resp = self.control(ControlRequest::VaultStatus { session_id })?;
         let body = expect_ok_control(resp)?;
         match body {
-            ControlResponse::VaultStatus { state } => {
+            ControlResponse::VaultStatus { state, generation } => {
                 let state = VaultState::from(state);
                 self.client.session.vault = Some(state);
-                Ok(state)
+                Ok((state, generation))
+            }
+            _ => Err(ClientError::UnexpectedControl),
+        }
+    }
+
+    /// D4-A stage 5: explicit migration of a plaintext pre-D4 store to encrypted storage.
+    /// The storage keys travel exactly as for [`Self::vault_unlock`] (unlock blob bound to
+    /// this session). Needs GRANT on system. On success the vault is unlocked.
+    pub fn storage_migrate_encrypt(
+        &mut self,
+        provider: &dyn KeyPassProvider,
+        purge_plaintext_backups: bool,
+    ) -> Result<(u64, u64, u64)> {
+        self.storage_migrate_encrypt_anchored(provider, purge_plaintext_backups, 0)
+    }
+
+    /// [`Self::storage_migrate_encrypt`] carrying the client's anti-rollback anchor (D4-D).
+    pub fn storage_migrate_encrypt_anchored(
+        &mut self,
+        provider: &dyn KeyPassProvider,
+        purge_plaintext_backups: bool,
+        min_generation: u64,
+    ) -> Result<(u64, u64, u64)> {
+        let session_id = self.client.session.require_session()?.to_string();
+        let binding = *self.client.session.require_binding()?;
+        let blob = create_unlock_blob_anchored(&session_id, &binding, provider, min_generation)?;
+        let resp = self.control(ControlRequest::StorageMigrateEncrypt {
+            session_id,
+            blob,
+            purge_plaintext_backups,
+        })?;
+        match expect_ok_control(resp)? {
+            ControlResponse::StorageMigrateEncrypt {
+                events,
+                tables,
+                purged_artifacts,
+            } => {
+                self.client.session.vault = Some(VaultState::Unlocked);
+                Ok((events, tables, purged_artifacts))
             }
             _ => Err(ClientError::UnexpectedControl),
         }
@@ -84,16 +130,51 @@ impl ControlClient<'_> {
     /// KeyPass → UnlockMaterial → UnlockBlob → VaultUnlock.
     /// Master Key never leaves the KeyPassProvider / seal path into UI types.
     pub fn vault_unlock(&mut self, provider: &dyn KeyPassProvider) -> Result<VaultState> {
+        self.vault_unlock_anchored(provider, 0).map(|(state, _)| state)
+    }
+
+    /// D4-D: unlock refusing storage older than `min_generation` (the highest generation
+    /// this client has seen); returns the opened storage's generation (the next anchor).
+    /// A server-side rollback fails with `StorageRollbackDetected`, vault locked.
+    pub fn vault_unlock_anchored(
+        &mut self,
+        provider: &dyn KeyPassProvider,
+        min_generation: u64,
+    ) -> Result<(VaultState, u64)> {
         let session_id = self.client.session.require_session()?.to_string();
         let binding = *self.client.session.require_binding()?;
-        let blob = create_unlock_blob(&session_id, &binding, provider)?;
+        let blob = create_unlock_blob_anchored(&session_id, &binding, provider, min_generation)?;
+        self.send_unlock(session_id, blob)
+    }
+
+    /// D4-E (variant B): unlock that authorizes an emergency restore of exactly the backup
+    /// whose `manifest.sealed` has SHA-256 `authorized`; `min_generation` = its checkpoint.
+    /// The server refuses any other artifact, or an authorization with no restore pending.
+    pub fn vault_unlock_restore(
+        &mut self,
+        provider: &dyn KeyPassProvider,
+        min_generation: u64,
+        authorized: &[u8; 32],
+    ) -> Result<(VaultState, u64)> {
+        let session_id = self.client.session.require_session()?.to_string();
+        let binding = *self.client.session.require_binding()?;
+        let blob =
+            create_unlock_blob_restore(&session_id, &binding, provider, min_generation, authorized)?;
+        self.send_unlock(session_id, blob)
+    }
+
+    fn send_unlock(
+        &mut self,
+        session_id: String,
+        blob: dmc_protocol::UnlockBlob,
+    ) -> Result<(VaultState, u64)> {
         let resp = self.control(ControlRequest::VaultUnlock {
             session_id,
             blob,
         })?;
         let body = expect_ok_control(resp)?;
         match body {
-            ControlResponse::VaultUnlock { state } => {
+            ControlResponse::VaultUnlock { state, generation } => {
                 let state = VaultState::from(state);
                 self.client.session.vault = Some(state);
                 if state != VaultState::Unlocked {
@@ -103,7 +184,7 @@ impl ControlClient<'_> {
                     )
                     .into());
                 }
-                Ok(state)
+                Ok((state, generation))
             }
             _ => Err(ClientError::UnexpectedControl),
         }
@@ -169,9 +250,11 @@ impl ControlClient<'_> {
             ControlResponse::BackupCreate {
                 backup_id,
                 checkpoint_sequence,
+                manifest_sealed_sha256,
             } => Ok(BackupCreateResult {
                 backup_id,
                 checkpoint_sequence,
+                manifest_sealed_sha256,
             }),
             _ => Err(ClientError::UnexpectedControl),
         }
@@ -382,6 +465,43 @@ impl ControlClient<'_> {
                 self.client.session.vault = None;
                 Ok(session_id)
             }
+            _ => Err(ClientError::UnexpectedControl),
+        }
+    }
+
+    // ── privilege administration (DMC IPC; caller needs GRANT on system) ─────
+
+    pub fn privilege_grant(&mut self, grantee: &str, privilege: dmc_protocol::PrivilegeWire) -> Result<bool> {
+        let session_id = self.client.session.require_session()?.to_string();
+        match expect_ok_control(self.control(ControlRequest::PrivilegeGrant {
+            session_id,
+            grantee: grantee.into(),
+            privilege,
+        })?)? {
+            ControlResponse::PrivilegeAck { changed } => Ok(changed),
+            _ => Err(ClientError::UnexpectedControl),
+        }
+    }
+
+    pub fn privilege_revoke(&mut self, grantee: &str, privilege: dmc_protocol::PrivilegeWire) -> Result<bool> {
+        let session_id = self.client.session.require_session()?.to_string();
+        match expect_ok_control(self.control(ControlRequest::PrivilegeRevoke {
+            session_id,
+            grantee: grantee.into(),
+            privilege,
+        })?)? {
+            ControlResponse::PrivilegeAck { changed } => Ok(changed),
+            _ => Err(ClientError::UnexpectedControl),
+        }
+    }
+
+    pub fn privilege_list(&mut self, identity: &str) -> Result<Vec<dmc_protocol::PrivilegeWire>> {
+        let session_id = self.client.session.require_session()?.to_string();
+        match expect_ok_control(self.control(ControlRequest::PrivilegeList {
+            session_id,
+            identity: identity.into(),
+        })?)? {
+            ControlResponse::Privileges { privileges } => Ok(privileges),
             _ => Err(ClientError::UnexpectedControl),
         }
     }

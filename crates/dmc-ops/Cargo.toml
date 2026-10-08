@@ -12,6 +12,7 @@ dmc-protocol = { path = "../dmc-protocol" }
 dmc-runtime = { path = "../dmc-runtime" }
 dmc-security = { path = "../dmc-security" }
 dmc-server = { path = "../dmc-server" }
+dmc-vault = { path = "../dmc-vault" }
 dmc-sql-exec = { path = "../dmc-sql-exec" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -19,6 +20,9 @@ thiserror = "2"
 toml = "0.8"
 
 [dev-dependencies]
+base64 = "0.22"
+hex = "0.4"
+sha2 = "0.10"
 tempfile = "3"
 dmc-observability = { path = "../dmc-observability" }
 dmc-sql-bind = { path = "../dmc-sql-bind" }

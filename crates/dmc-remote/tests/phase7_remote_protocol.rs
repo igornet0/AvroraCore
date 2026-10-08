@@ -191,7 +191,10 @@ fn remote_sql_e2e_create_insert_commit_select() {
 }
 
 #[test]
-fn reconnect_preserves_session_and_transaction() {
+/// D5 + F8 (replaces "reconnect preserves session and transaction"): the session ends
+/// with its connection, so it cannot COMMIT from a new connection, and the transaction it
+/// left open is rolled back — never committed.
+fn reconnect_ends_session_and_rolls_back_open_transaction() {
     let dir = tempdir().unwrap();
     let state = Arc::new(Mutex::new(bootstrap_core_state_unlocked_for_test(dir.path(), false)));
     let addr = pick_ephemeral_addr();
@@ -230,17 +233,22 @@ fn reconnect_preserves_session_and_transaction() {
             session_id: session_id.clone(),
         })
         .unwrap();
-    assert_eq!(info.status, ResponseStatus::Ok);
-
-    client
+    assert_eq!(info.error_code, Some(ProtocolErrorCode::SessionInvalid));
+    let commit = client
         .data(DataRequest::Commit {
             session_id: session_id.clone(),
         })
         .unwrap();
+    assert_eq!(commit.error_code, Some(ProtocolErrorCode::SessionInvalid));
+
+    let fresh = session_from_auth(client.authenticate("analyst", "pw").unwrap());
     let select = client
-        .execute_sql(&session_id, "SELECT id FROM items WHERE id = 2")
+        .execute_sql(&fresh, "SELECT id FROM items WHERE id = 2")
         .unwrap();
-    assert_eq!(select.status, ResponseStatus::Ok);
+    match expect_ok_data(select).unwrap() {
+        dmc_protocol::DataResponse::SqlResult(r) => assert!(r.rows.is_empty(), "orphan transaction must be rolled back"),
+        other => panic!("unexpected {other:?}"),
+    }
     client.close().unwrap();
     drop(handle);
 }

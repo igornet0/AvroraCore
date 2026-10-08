@@ -9,7 +9,7 @@ use crate::auth::credential::{AuthenticatedIdentity, PasswordRecord, INVALID_CRE
 use crate::auth::identity::{Identity, IdentityDirectory, IdentityId, IdentityStatus, KeyCustody};
 use crate::auth::principal::AuthPrincipal;
 use crate::auth::session::{AuthSession, InMemorySessionStore, SessionManager};
-use crate::auth::{Authenticator, CatalogAuthorizer, Credential, CredentialVerifier, GrantStore, PasswordCredentialVerifier};
+use crate::auth::{Action, Authenticator, CatalogAuthorizer, Resource, Credential, CredentialVerifier, GrantStore, PasswordCredentialVerifier};
 use crate::identity::SessionId;
 use crate::{Error, Result};
 
@@ -25,6 +25,15 @@ pub struct AuthService {
     request_channel: Option<String>,
     /// Pending Ed25519 authentication challenges (single use, short TTL).
     pub(crate) challenges: crate::auth::client_auth::ChallengeStore,
+    /// Record of the one-time operator bootstrap, if it happened (persisted).
+    bootstrap: Option<BootstrapRecord>,
+}
+
+/// Who was bootstrapped as first operator, and when. Persisted with the identities.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BootstrapRecord {
+    pub operator_identity: IdentityId,
+    pub consumed_at_ms: u64,
 }
 
 impl Default for AuthService {
@@ -42,7 +51,87 @@ impl AuthService {
             grants: GrantStore::new(),
             request_channel: None,
             challenges: crate::auth::client_auth::ChallengeStore::new(),
+            bootstrap: None,
         }
+    }
+
+    pub fn bootstrap_record(&self) -> Option<&BootstrapRecord> {
+        self.bootstrap.as_ref()
+    }
+
+    pub(crate) fn set_bootstrap_record(&mut self, record: BootstrapRecord) {
+        self.bootstrap = Some(record);
+    }
+
+    // ── network privilege administration ──────────────────────────────────────
+
+    /// The caller (a live session) must hold `GRANT` on `system` and may not target
+    /// itself. Returns (caller identity, grantee identity).
+    fn privilege_authority(&self, caller: &SessionId, grantee_name: &str) -> Result<(IdentityId, IdentityId)> {
+        let principal = self.principal_for(caller)?;
+        if !self
+            .grants
+            .has_grant(&principal.identity_id, &Resource::System, Action::Grant)
+        {
+            return Err(Error::PermissionDenied("GRANT on system required".into()));
+        }
+        let grantee = self
+            .identities
+            .get_by_name(grantee_name)
+            .filter(|i| i.is_active())
+            .ok_or_else(|| Error::PermissionDenied("unknown or disabled grantee".into()))?;
+        if grantee.id == principal.identity_id {
+            return Err(Error::PermissionDenied("privileges cannot be granted to or revoked from oneself".into()));
+        }
+        Ok((principal.identity_id, grantee.id.clone()))
+    }
+
+    /// Grant `action` on `resource` to `grantee_name`. Returns (changed, grantee id).
+    pub fn grant_privilege(
+        &mut self,
+        caller: &SessionId,
+        grantee_name: &str,
+        resource: Resource,
+        action: Action,
+    ) -> Result<(bool, IdentityId)> {
+        let (_, grantee) = self.privilege_authority(caller, grantee_name)?;
+        let changed = !self.grants.has_grant(&grantee, &resource, action);
+        self.grants.grant(grantee.clone(), resource, action);
+        Ok((changed, grantee))
+    }
+
+    /// Revoke `action` on `resource` from `grantee_name`. The caller keeps its own
+    /// `GRANT` (no self-revoke), so at least one administrator always remains.
+    pub fn revoke_privilege(
+        &mut self,
+        caller: &SessionId,
+        grantee_name: &str,
+        resource: &Resource,
+        action: Action,
+    ) -> Result<(bool, IdentityId)> {
+        let (_, grantee) = self.privilege_authority(caller, grantee_name)?;
+        Ok((self.grants.revoke(&grantee, resource, action), grantee))
+    }
+
+    /// Privileges of `identity_name`: visible to `GRANT` holders and to the identity itself.
+    pub fn list_privileges(&self, caller: &SessionId, identity_name: &str) -> Result<Vec<(Resource, Action)>> {
+        let principal = self.principal_for(caller)?;
+        let target = self
+            .identities
+            .get_by_name(identity_name)
+            .ok_or_else(|| Error::PermissionDenied("unknown identity".into()))?;
+        let admin = self
+            .grants
+            .has_grant(&principal.identity_id, &Resource::System, Action::Grant);
+        if !admin && target.id != principal.identity_id {
+            return Err(Error::PermissionDenied("GRANT on system required".into()));
+        }
+        Ok(self
+            .grants
+            .for_identity(&target.id)
+            .into_iter()
+            .map(|g| (g.resource, g.action))
+            .collect())
     }
 
     /// Bind the current network request to `channel` (D5). Every session check during
@@ -340,18 +429,22 @@ impl AuthService {
             format_version: IDENTITY_FILE_FORMAT,
             identities,
             credentials,
+            grants: self.grants.grants().to_vec(),
+            bootstrap: self.bootstrap.clone(),
         };
         let raw = serde_json::to_vec_pretty(&file)
             .map_err(|e| Error::Conflict(format!("identity file encode: {e}")))?;
-        write_atomic(path, &raw)
+        dmc_vault::secure_fs::write_secret_file(path, &raw)
+            .map_err(|e| Error::Conflict(format!("identity file write: {e}")))
     }
 
-    /// Load identities + verifiers (sessions and grants are not persisted here).
+    /// Load identities, password verifiers, grants and the bootstrap record (v2), or a
+    /// v1 file (identities + verifiers, no grants). Sessions are never persisted.
     pub fn load_identities(&mut self, path: &Path) -> Result<()> {
         let raw = std::fs::read(path).map_err(|e| Error::Conflict(format!("identity file: {e}")))?;
         let file: IdentityFile = serde_json::from_slice(&raw)
             .map_err(|e| Error::Conflict(format!("identity file decode: {e}")))?;
-        if file.format_version != IDENTITY_FILE_FORMAT {
+        if file.format_version != IDENTITY_FILE_FORMAT && file.format_version != 1 {
             return Err(Error::Conflict(format!(
                 "unsupported identity file format {}",
                 file.format_version
@@ -364,40 +457,26 @@ impl AuthService {
         self.identities = dir;
         self.credentials
             .replace_records(file.credentials.into_iter().collect());
+        self.grants.replace(file.grants);
+        self.bootstrap = file.bootstrap;
         Ok(())
     }
 }
 
-const IDENTITY_FILE_FORMAT: u32 = 1;
+/// v1: identities + credentials. v2: + grants + bootstrap record.
+const IDENTITY_FILE_FORMAT: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 struct IdentityFile {
     format_version: u32,
     identities: Vec<Identity>,
     credentials: Vec<(String, PasswordRecord)>,
+    #[serde(default)]
+    grants: Vec<crate::auth::grant::Grant>,
+    #[serde(default)]
+    bootstrap: Option<BootstrapRecord>,
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    use std::io::Write;
-    let io = |e: std::io::Error| Error::Conflict(format!("identity file write: {e}"));
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(dir).map_err(io)?;
-    let tmp = path.with_extension("tmp");
-    {
-        let mut f = std::fs::File::create(&tmp).map_err(io)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600)).map_err(io)?;
-        }
-        f.write_all(bytes).map_err(io)?;
-        f.sync_all().map_err(io)?;
-    }
-    std::fs::rename(&tmp, path).map_err(io)?;
-    std::fs::File::open(dir)
-        .and_then(|d| d.sync_all())
-        .map_err(io)
-}
 
 impl Authenticator for AuthService {
     fn authenticate(&self, credential: &Credential) -> Result<AuthenticatedIdentity> {
@@ -420,10 +499,10 @@ impl SessionManager for AuthService {
         let session = self.sessions.validate_session(session_id)?;
         self.require_live_identity(&session)?;
         // D5: inside a network request the session must belong to that request's channel.
-        if let Some(channel) = &self.request_channel {
-            if session.channel.as_deref() != Some(channel.as_str()) {
-                return Err(Error::UnknownSession(session_id.as_str().to_string()));
-            }
+        if let Some(channel) = &self.request_channel
+            && session.channel.as_deref() != Some(channel.as_str())
+        {
+            return Err(Error::UnknownSession(session_id.as_str().to_string()));
         }
         Ok(session)
     }

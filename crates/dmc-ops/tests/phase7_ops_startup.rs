@@ -28,22 +28,27 @@ fn fresh_data_root_ready_locked() {
     assert!(started.layout.backup_root().is_dir());
     assert!(started.layout.vault_root().is_dir());
     assert!(!started.recovery_required);
-    assert!(started.layout.state_event_log().is_file() || started.server.ctx.journal().is_some());
+    // D4-A: storage is opened only after VaultUnlock — nothing is read while locked
+    assert!(started.server.storage_sealed());
+    assert!(started.server.ctx.journal().is_none());
 }
 
 #[test]
 fn provisioning_is_idempotent_on_restart() {
     let dir = tempdir().unwrap();
     let root = dir.path().join("data");
-    let first = start_core(cfg_for(&root), StartupOptions::production()).unwrap();
+    let mut first = start_core(cfg_for(&root), StartupOptions::production()).unwrap();
+    let master = first.unlock_material.clone().expect("a fresh key store issues the Master Key once");
+    first.server.apply_vault_unlock(&master).unwrap();
     let tip1 = first.server.ctx.journal().unwrap().tip_sequence();
     drop(first);
 
-    let second = start_core(cfg_for(&root), StartupOptions::production()).unwrap();
+    let mut second = start_core(cfg_for(&root), StartupOptions::production()).unwrap();
     assert_started_invariants(&second);
+    assert!(second.vault_locked());
+    second.server.apply_vault_unlock(&master).unwrap();
     let tip2 = second.server.ctx.journal().unwrap().tip_sequence();
     assert_eq!(tip1, tip2);
-    assert!(second.vault_locked());
 }
 
 #[test]

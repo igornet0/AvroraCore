@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use dmc_materialized::StateEventRecord;
+use dmc_vault::StorageCipher;
 
 use crate::error::{BackupError, Result};
 
@@ -6,17 +9,33 @@ use crate::error::{BackupError, Result};
 #[derive(Clone, Debug)]
 pub struct BackupSource {
     events: Vec<StateEventRecord>,
+    /// D4-A storage keys: when set, the artifact is written encrypted.
+    cipher: Option<Arc<StorageCipher>>,
 }
 
 impl BackupSource {
     pub fn from_events(events: Vec<StateEventRecord>) -> Self {
-        Self { events }
+        Self {
+            events,
+            cipher: None,
+        }
     }
 
     pub fn from_log(log: &impl dmc_materialized::StateEventLog) -> Self {
         Self {
             events: log.events().to_vec(),
+            cipher: None,
         }
+    }
+
+    /// Write the artifact encrypted with these storage keys (`None` = plaintext, dev/test).
+    pub fn with_cipher(mut self, cipher: Option<Arc<StorageCipher>>) -> Self {
+        self.cipher = cipher;
+        self
+    }
+
+    pub fn cipher(&self) -> Option<&Arc<StorageCipher>> {
+        self.cipher.as_ref()
     }
 
     pub fn events(&self) -> &[StateEventRecord] {

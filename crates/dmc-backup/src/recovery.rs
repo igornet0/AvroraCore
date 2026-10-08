@@ -5,11 +5,13 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use dmc_materialized::{
-    save_materialized_snapshot, write_state_event_log, MaterializedStateSnapshot, StateEventLog,
+    save_materialized_snapshot_with, write_state_event_log_with, MaterializedStateSnapshot,
     StateEventRecord, StateMaterializer, STATE_EVENT_LOG_FORMAT_VERSION,
 };
+use dmc_vault::StorageCipher;
 use dmc_model::{Catalog, MaterializedWatermark};
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +22,8 @@ use crate::digest::{copy_dir_all, write_json_atomic};
 use crate::error::{BackupError, Result};
 use crate::manifest::{BackupManifest, MANIFEST_FILE};
 use crate::restore::{SessionRestoreState, VaultRestoreState};
-use crate::verify::verify_backup;
+use crate::sealed::{read_component, BackupKeys};
+use crate::verify::verify_backup_with;
 
 pub const LIVE_DIR: &str = "live";
 pub const RECOVERY_STATE_FILE: &str = "recovery/state.json";
@@ -109,7 +112,39 @@ impl RecoveryGate {
 /// Recover a restored backup target into a runnable live DB @ N.
 ///
 /// Idempotent: repeated calls on an already-Ready target re-verify and return success.
+/// Keyless: only plaintext (dev/test, pre-D4) artifacts; see [`recover_with`].
 pub fn recover(target: &Path) -> Result<RecoveryResult> {
+    recover_with(target, None)
+}
+
+/// D4-C: production recovery. The restore target must carry a valid sealed restore
+/// attestation for exactly its `manifest.sealed` (written by
+/// [`crate::restore_backup_registered`]); with `registry_root` (the live storage root, when
+/// reachable) the backup must also still be the registered one. Then [`recover_with`].
+pub fn recover_registered(
+    target: &Path,
+    cipher: Arc<StorageCipher>,
+    registry_root: Option<&Path>,
+) -> Result<RecoveryResult> {
+    let manifest: BackupManifest = read_json(&target.join(MANIFEST_FILE))?;
+    if !manifest.encrypted {
+        return Err(BackupError::BackupInvalid(
+            "unencrypted backup: explicit migration required".into(),
+        ));
+    }
+    crate::registry::check_attestation(target, &manifest, &cipher)?;
+    if let Some(root) = registry_root {
+        crate::registry::BackupRegistry::load(root, &cipher)?.confirm(target, &manifest)?;
+    }
+    // keyed verification inside authenticates manifest.json against manifest.sealed
+    recover_with(target, Some(cipher))
+}
+
+/// [`recover`] with the storage keys (D4-A). An encrypted artifact is authenticated and
+/// decrypted in memory; the live tree is written encrypted with the same keys. Without
+/// keys an encrypted artifact is refused before anything is written ([`BackupError::KeysRequired`]).
+/// Does **not** unlock the vault: the caller passes keys it already holds.
+pub fn recover_with(target: &Path, cipher: Option<Arc<StorageCipher>>) -> Result<RecoveryResult> {
     if !target.is_dir() {
         return Err(BackupError::Io(format!(
             "recovery target is not a directory: {}",
@@ -120,8 +155,8 @@ pub fn recover(target: &Path) -> Result<RecoveryResult> {
     // Existing Ready → verify still consistent, no work.
     if let Ok(gate) = RecoveryGate::load(target) {
         if gate.state == RecoveryState::Ready && gate.live_root.is_dir() {
-            verify_checkpoints(target)?;
-            verify_live_at_n(&gate.live_root, gate.checkpoint_sequence)?;
+            verify_checkpoints(target, cipher.as_deref())?;
+            verify_live_at_n(&gate.live_root, gate.checkpoint_sequence, cipher.clone())?;
             return Ok(RecoveryResult {
                 checkpoint_sequence: gate.checkpoint_sequence,
                 state: RecoveryState::Ready,
@@ -134,7 +169,7 @@ pub fn recover(target: &Path) -> Result<RecoveryResult> {
         }
     }
 
-    let n = verify_checkpoints(target)?;
+    let n = verify_checkpoints(target, cipher.as_deref())?;
     write_recovery_state(
         target,
         RecoveryState::Recovering,
@@ -144,9 +179,9 @@ pub fn recover(target: &Path) -> Result<RecoveryResult> {
     )?;
 
     let run = (|| -> Result<RecoveryResult> {
-        let live = prepare_live_tree(target, n)?;
-        rebuild_derived_projections(&live, n)?;
-        verify_live_at_n(&live, n)?;
+        let live = prepare_live_tree(target, n, cipher.as_ref())?;
+        rebuild_derived_projections(&live, n, cipher.clone())?;
+        verify_live_at_n(&live, n, cipher.clone())?;
         write_recovery_state(target, RecoveryState::Ready, n, true, true)?;
         Ok(RecoveryResult {
             checkpoint_sequence: n,
@@ -168,16 +203,24 @@ pub fn recover(target: &Path) -> Result<RecoveryResult> {
     }
 }
 
-fn verify_checkpoints(target: &Path) -> Result<u64> {
-    let report = verify_backup(target)?;
+fn verify_checkpoints(target: &Path, cipher: Option<&StorageCipher>) -> Result<u64> {
+    let manifest: BackupManifest = read_json(&target.join(MANIFEST_FILE))?;
+    if manifest.encrypted && cipher.is_none() {
+        return Err(BackupError::KeysRequired(
+            "restored backup is encrypted; recovery needs the unlocked storage keys".into(),
+        ));
+    }
+    let report = verify_backup_with(target, cipher)?;
     if !report.valid {
         return Err(BackupError::BackupInvalid(report.errors.join("; ")));
     }
     let n = report.checkpoint_sequence;
 
-    let manifest: BackupManifest = read_json(&target.join(MANIFEST_FILE))?;
+    let keys = cipher.map(|c| BackupKeys::for_manifest(c, &manifest));
     let journal: JournalArtifact = read_json(&target.join("journal/manifest.json"))?;
-    let catalog: CatalogArtifact = read_json(&target.join("catalog/catalog.json"))?;
+    let catalog: CatalogArtifact =
+        read_component(target, "catalog/catalog.json", manifest.encrypted, keys.as_ref())?
+            .ok_or_else(|| BackupError::KeysRequired("catalog is encrypted".into()))?;
     let storage: StorageArtifact = read_json(&target.join("storage/manifest.json"))?;
     let recovery: RecoveryArtifact = read_json(&target.join("recovery/metadata.json"))?;
 
@@ -200,7 +243,7 @@ fn verify_checkpoints(target: &Path) -> Result<u64> {
     Ok(n)
 }
 
-fn prepare_live_tree(target: &Path, n: u64) -> Result<PathBuf> {
+fn prepare_live_tree(target: &Path, n: u64, cipher: Option<&Arc<StorageCipher>>) -> Result<PathBuf> {
     let stage_root = target.join(RECOVER_STAGE_DIR);
     let stage = stage_root.join("live");
     if stage_root.exists() {
@@ -208,9 +251,11 @@ fn prepare_live_tree(target: &Path, n: u64) -> Result<PathBuf> {
     }
     fs::create_dir_all(&stage).map_err(|e| BackupError::Io(e.to_string()))?;
 
-    let events = load_journal_events(target, n)?;
+    let manifest: BackupManifest = read_json(&target.join(MANIFEST_FILE))?;
+    let keys = cipher.map(|c| BackupKeys::for_manifest(c, &manifest));
+    let events = load_journal_events(target, n, &manifest, keys.as_ref())?;
     let event_log_path = stage.join("state_events.json");
-    write_state_event_log(&event_log_path, events.clone())
+    write_state_event_log_with(&event_log_path, events.clone(), cipher.cloned())
         .map_err(|e| BackupError::Corrupt(format!("write state_events: {e}")))?;
 
     let rows = stage.join("rows");
@@ -218,7 +263,9 @@ fn prepare_live_tree(target: &Path, n: u64) -> Result<PathBuf> {
 
     let storage: StorageArtifact = read_json(&target.join("storage/manifest.json"))?;
     let recovery: RecoveryArtifact = read_json(&target.join("recovery/metadata.json"))?;
-    let catalog_art: CatalogArtifact = read_json(&target.join("catalog/catalog.json"))?;
+    let catalog_art: CatalogArtifact =
+        read_component(target, "catalog/catalog.json", manifest.encrypted, keys.as_ref())?
+            .ok_or_else(|| BackupError::KeysRequired("catalog is encrypted".into()))?;
     let catalog = Catalog::from_snapshot_body(catalog_art.catalog.clone())
         .map_err(|e| BackupError::Corrupt(format!("catalog: {e}")))?;
 
@@ -241,14 +288,18 @@ fn prepare_live_tree(target: &Path, n: u64) -> Result<PathBuf> {
             catalog.to_snapshot_body(),
             seen,
         );
-        save_materialized_snapshot(&stage.join("materialized_snapshot.json"), &snapshot)
-            .map_err(|e| BackupError::Corrupt(format!("snapshot: {e}")))?;
+        save_materialized_snapshot_with(
+            &stage.join("materialized_snapshot.json"),
+            &snapshot,
+            cipher.map(|c| c.as_ref()),
+        )
+        .map_err(|e| BackupError::Corrupt(format!("snapshot: {e}")))?;
     } else {
         // Empty snapshot path; open() will full-replay from state_events.
         let _ = STATE_EVENT_LOG_FORMAT_VERSION;
     }
 
-    crate::ownership::install_into_live(target, &stage)?;
+    crate::ownership::install_into_live(target, &stage, &manifest, keys.as_ref())?;
 
     // Publish staged live → target/live atomically.
     let live = target.join(LIVE_DIR);
@@ -260,11 +311,18 @@ fn prepare_live_tree(target: &Path, n: u64) -> Result<PathBuf> {
     Ok(live)
 }
 
-fn load_journal_events(target: &Path, n: u64) -> Result<Vec<StateEventRecord>> {
+fn load_journal_events(
+    target: &Path,
+    n: u64,
+    manifest: &BackupManifest,
+    keys: Option<&BackupKeys<'_>>,
+) -> Result<Vec<StateEventRecord>> {
     let journal: JournalArtifact = read_json(&target.join("journal/manifest.json"))?;
     let mut events = Vec::new();
     for seg in &journal.segments {
-        let file: JournalSegmentFile = read_json(&target.join(&seg.relative_path))?;
+        let file: JournalSegmentFile =
+            read_component(target, &seg.relative_path, manifest.encrypted, keys)?
+                .ok_or_else(|| BackupError::KeysRequired("journal is encrypted".into()))?;
         events.extend(file.events);
     }
     events.sort_by_key(|e| e.sequence);
@@ -279,16 +337,25 @@ fn load_journal_events(target: &Path, n: u64) -> Result<Vec<StateEventRecord>> {
     Ok(events)
 }
 
-fn rebuild_derived_projections(live: &Path, n: u64) -> Result<()> {
+fn rebuild_derived_projections(
+    live: &Path,
+    n: u64,
+    cipher: Option<Arc<StorageCipher>>,
+) -> Result<()> {
     let rows = live.join("rows");
     let snapshot = live.join("materialized_snapshot.json");
     let log = live.join("state_events.json");
 
     let mut mat = if snapshot.is_file() {
-        StateMaterializer::open_recovered(&rows, snapshot.clone(), log.clone())
-            .map_err(|e| BackupError::Corrupt(format!("open_recovered: {e}")))?
+        StateMaterializer::open_recovered_with_cipher(
+            &rows,
+            snapshot.clone(),
+            log.clone(),
+            cipher.clone(),
+        )
+        .map_err(|e| BackupError::Corrupt(format!("open_recovered: {e}")))?
     } else {
-        StateMaterializer::open(&rows, snapshot.clone(), log.clone())
+        StateMaterializer::open_with_cipher(&rows, snapshot.clone(), log.clone(), cipher.clone())
             .map_err(|e| BackupError::Corrupt(format!("open/replay: {e}")))?
     };
 
@@ -305,20 +372,15 @@ fn rebuild_derived_projections(live: &Path, n: u64) -> Result<()> {
     mat.rebuild_all_statistics()
         .map_err(|e| BackupError::Corrupt(format!("statistics rebuild: {e}")))?;
 
-    // Persist snapshot reflecting Ready materialization.
-    let seen: Vec<[u8; 16]> = mat.event_log().events().iter().map(|e| e.event_id).collect();
-    let snap = MaterializedStateSnapshot::new(
-        MaterializedWatermark::at(n),
-        mat.catalog().to_snapshot_body(),
-        seen,
-    );
-    save_materialized_snapshot(&snapshot, &snap)
+    // Persist snapshot reflecting Ready materialization — including every store's
+    // generation (D4-B), so later opens detect a rolled-back table / index.
+    mat.persist_snapshot_if_configured()
         .map_err(|e| BackupError::Corrupt(format!("persist snapshot: {e}")))?;
 
     Ok(())
 }
 
-fn verify_live_at_n(live: &Path, n: u64) -> Result<()> {
+fn verify_live_at_n(live: &Path, n: u64, cipher: Option<Arc<StorageCipher>>) -> Result<()> {
     let rows = live.join("rows");
     let snapshot = live.join("materialized_snapshot.json");
     let log = live.join("state_events.json");
@@ -327,10 +389,10 @@ fn verify_live_at_n(live: &Path, n: u64) -> Result<()> {
     }
     // Prefer recovered open when snapshot exists (avoid second full replay).
     let mat = if snapshot.is_file() {
-        StateMaterializer::open_recovered(&rows, snapshot, log)
+        StateMaterializer::open_recovered_with_cipher(&rows, snapshot, log, cipher)
             .map_err(|e| BackupError::Corrupt(format!("verify live: {e}")))?
     } else {
-        StateMaterializer::open(&rows, snapshot, log)
+        StateMaterializer::open_with_cipher(&rows, snapshot, log, cipher)
             .map_err(|e| BackupError::Corrupt(format!("verify live: {e}")))?
     };
     if mat.tip_sequence() != n || mat.watermark().sequence != n {

@@ -3,8 +3,9 @@
 use std::path::PathBuf;
 
 use dmc_backup::{
-    backup_path, list_backups, recover, restore_backup, restore_target_path, verify_backup,
-    BackupCoordinator, BackupOptions, BackupRequest, RecoveryGate, RecoveryState,
+    backup_path, list_backups, recover_registered, recover_with, restore_backup,
+    restore_backup_registered, restore_target_path, verify_backup_with, BackupCoordinator,
+    BackupOptions, BackupRequest, RecoveryGate, RecoveryState,
 };
 use dmc_protocol::{BackupListItem, ControlResponse, ProtocolErrorCode, ResponseEnvelope};
 use dmc_security::auth::SessionManager;
@@ -36,9 +37,34 @@ fn require_session(
     }
 }
 
+/// D4-A: the storage keys of the currently open SQL storage (none while sealed, and none
+/// for a plaintext store). Encrypted backups are verified / recovered with exactly these.
+fn open_storage_cipher(state: &CoreServerState) -> Option<std::sync::Arc<dmc_vault::StorageCipher>> {
+    match state.ctx.journal() {
+        Some(JournalBackend::File(mat)) => mat.storage_cipher().cloned(),
+        Some(JournalBackend::Memory(mat)) => mat.storage_cipher().cloned(),
+        None => None,
+    }
+}
+
+/// D4-C: keys and live storage root (where the backup registry lives) of the open store.
+fn open_registry(
+    state: &CoreServerState,
+) -> Option<(std::sync::Arc<dmc_vault::StorageCipher>, PathBuf)> {
+    let (cipher, root) = match state.ctx.journal() {
+        Some(JournalBackend::File(mat)) => (mat.storage_cipher().cloned(), mat.storage_root()),
+        Some(JournalBackend::Memory(mat)) => (mat.storage_cipher().cloned(), mat.storage_root()),
+        None => return None,
+    };
+    cipher.map(|c| (c, root.to_path_buf()))
+}
+
 fn map_backup_err(request_id: u64, err: dmc_backup::BackupError) -> ResponseEnvelope<ControlResponse> {
     use dmc_backup::BackupError;
     match err {
+        BackupError::KeysRequired(_) => {
+            ResponseEnvelope::err(request_id, ProtocolErrorCode::VaultLocked, "vault is locked")
+        }
         BackupError::BackupInvalid(_) | BackupError::Corrupt(_) | BackupError::Validation(_) => {
             ResponseEnvelope::err(
                 request_id,
@@ -127,7 +153,7 @@ pub fn backup_create(
         );
     }
     let root = backups_root(state);
-    let req = BackupRequest::new("avrora")
+    let mut req = BackupRequest::new("avrora")
         .with_options(BackupOptions {
             include_rowstore,
             include_statistics: false,
@@ -135,7 +161,15 @@ pub fn backup_create(
         })
         // CLIENT_OWNED key directory travels with the data (public / wrapped only).
         .with_ownership_dir(state.data_root.join("ownership"));
+    // D4-E: the key store (wrapped keys only) travels too — restorable with the Master Key
+    // alone, on any host.
+    if let Some(key_store) = state.key_store_path() {
+        req = req.with_key_store(key_store);
+    }
 
+    if state.storage_sealed() {
+        return ResponseEnvelope::err(request_id, ProtocolErrorCode::VaultLocked, "vault is locked");
+    }
     let published = match state.ctx.journal() {
         Some(JournalBackend::File(mat)) => {
             BackupCoordinator::create_and_publish(mat, &req, &root, backup_id)
@@ -159,11 +193,21 @@ pub fn backup_create(
                 backup_id,
                 p.manifest.checkpoint_sequence,
             );
+            // D4-E: hash of the authenticated manifest — the client's backup anchor
+            let manifest_sealed_sha256 = if p.manifest.encrypted {
+                match dmc_backup::manifest_sealed_hash(&p.path) {
+                    Ok(h) => h,
+                    Err(e) => return map_backup_err(request_id, e),
+                }
+            } else {
+                String::new()
+            };
             ResponseEnvelope::ok(
                 request_id,
                 ControlResponse::BackupCreate {
                     backup_id: backup_id.to_string(),
                     checkpoint_sequence: p.manifest.checkpoint_sequence,
+                    manifest_sealed_sha256,
                 },
             )
         }
@@ -202,7 +246,8 @@ pub fn backup_verify(
             "backup not found",
         );
     }
-    match verify_backup(&path) {
+    let cipher = open_storage_cipher(state);
+    match verify_backup_with(&path, cipher.as_deref()) {
         Ok(report) => {
             crate::observe::emit_backup_verified(
                 state,
@@ -288,7 +333,15 @@ pub fn backup_restore(
     let target = restore_target_path(&restores_root(state), target_id);
     let ctx = obs_ctx(connection_id, request_id, session_id);
     crate::observe::emit_backup_restore_started(state, ctx.clone());
-    match restore_backup(&backup, &target) {
+    // D4-C: an encrypted store restores only registered backups (registry = live storage)
+    let restored = match open_registry(state) {
+        Some((cipher, root)) => restore_backup_registered(&backup, &target, &root, &cipher),
+        None if state.storage_sealed() => {
+            return ResponseEnvelope::err(request_id, ProtocolErrorCode::VaultLocked, "vault is locked");
+        }
+        None => restore_backup(&backup, &target),
+    };
+    match restored {
         Ok(r) => {
             crate::observe::emit_backup_restored(
                 state,
@@ -337,7 +390,11 @@ pub fn backup_recover(
         );
     }
     crate::observe::emit_recovery_started(state, obs_ctx(connection_id, request_id, session_id));
-    match recover(&target) {
+    let recovered = match open_registry(state) {
+        Some((cipher, root)) => recover_registered(&target, cipher, Some(&root)),
+        None => recover_with(&target, open_storage_cipher(state)),
+    };
+    match recovered {
         Ok(r) => {
             crate::observe::emit_recovery_completed(
                 state,

@@ -1,4 +1,4 @@
-use dmc_pgwire::serve;
+use dmc_pgwire::legacy::serve;
 use dmc_sql::SqlEngine;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};

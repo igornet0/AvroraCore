@@ -101,6 +101,45 @@ pub fn create_unlock_blob(
         .map_err(|_| KeyPassError::UnlockFailed)
 }
 
+/// D4-D: unlock blob carrying the client's anti-rollback anchor (the highest storage
+/// generation this client has seen for the installation).
+pub fn create_unlock_blob_anchored(
+    session_id: &str,
+    unlock_binding_key: &[u8; 32],
+    provider: &dyn KeyPassProvider,
+    min_generation: u64,
+) -> Result<UnlockBlob, KeyPassError> {
+    let material = provider.unlock()?;
+    crate::unlock_blob::seal_unlock_blob_anchored(
+        session_id,
+        unlock_binding_key,
+        &material,
+        min_generation,
+    )
+    .map_err(|_| KeyPassError::UnlockFailed)
+}
+
+/// D4-E (variant B): unlock blob that also authorizes an emergency restore of exactly the
+/// backup whose `manifest.sealed` has SHA-256 `authorized` (stored by this client when the
+/// backup was created). `min_generation` is that backup's checkpoint.
+pub fn create_unlock_blob_restore(
+    session_id: &str,
+    unlock_binding_key: &[u8; 32],
+    provider: &dyn KeyPassProvider,
+    min_generation: u64,
+    authorized: &[u8; 32],
+) -> Result<UnlockBlob, KeyPassError> {
+    let material = provider.unlock()?;
+    crate::unlock_blob::seal_unlock_blob_restore(
+        session_id,
+        unlock_binding_key,
+        &material,
+        min_generation,
+        authorized,
+    )
+    .map_err(|_| KeyPassError::UnlockFailed)
+}
+
 pub fn vault_unlock<C: std::io::Read + std::io::Write>(
     client: &mut ProtocolClient<C>,
     session_id: &str,
@@ -137,7 +176,7 @@ pub fn vault_lock<C: std::io::Read + std::io::Write>(
 pub fn expect_vault_unlocked(resp: ResponseEnvelope<ControlResponse>) -> dmc_protocol::Result<()> {
     let body = expect_ok_control(resp)?;
     match body {
-        ControlResponse::VaultUnlock { state } => {
+        ControlResponse::VaultUnlock { state, .. } => {
             if state == dmc_protocol::VaultStateWire::Unlocked {
                 Ok(())
             } else {

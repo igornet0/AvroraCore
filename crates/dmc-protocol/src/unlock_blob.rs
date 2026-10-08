@@ -2,6 +2,16 @@ use crate::error::ProtocolErrorCode;
 use crate::{ProtocolError, Result};
 
 pub const UNLOCK_BLOB_VERSION: u16 = 1;
+/// D4-D: v2 seals `material ‖ min_generation (u64 BE)` — the client's anti-rollback anchor
+/// travels inside the AEAD (the version is in the AAD, so it can be neither altered nor
+/// downgraded unnoticed).
+pub const UNLOCK_BLOB_VERSION_ANCHORED: u16 = 2;
+/// D4-E (variant B): v3 seals `material ‖ min_generation (u64 BE) ‖ SHA-256 of the
+/// client-authorized backup's manifest.sealed` — the emergency-restore authorization for
+/// exactly one backup artifact, bound by the AEAD (version in the AAD).
+pub const UNLOCK_BLOB_VERSION_RESTORE: u16 = 3;
+/// Length of the backup authorization (SHA-256) in a v3 blob.
+pub const UNLOCK_RESTORE_AUTHORIZATION_LEN: usize = 32;
 pub const UNLOCK_BLOB_NONCE_LEN: usize = 12;
 pub const UNLOCK_MATERIAL_LEN: usize = 32;
 
@@ -58,7 +68,13 @@ mod serde_bytes {
 }
 
 pub fn validate_unlock_blob(blob: &UnlockBlob, max_size: u32) -> Result<()> {
-    if blob.version != UNLOCK_BLOB_VERSION {
+    if ![
+        UNLOCK_BLOB_VERSION,
+        UNLOCK_BLOB_VERSION_ANCHORED,
+        UNLOCK_BLOB_VERSION_RESTORE,
+    ]
+    .contains(&blob.version)
+    {
         return Err(ProtocolError::wire(
             ProtocolErrorCode::UnlockBlobInvalid,
             "unsupported unlock blob version",

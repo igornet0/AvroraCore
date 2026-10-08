@@ -120,6 +120,8 @@ fn serve_connection_with<C: Read + Write, S: StateAccess>(
     state.with(|s| {
         // D5: sessions bound to this connection end with it (no rebind protocol).
         s.auth.close_channel(&conn_limits.connection_id);
+        // F8: a transaction left open by a session of this connection is rolled back
+        s.reap_orphan_transaction();
         crate::metrics_rec::connection_closed(s);
         s.release_connection();
     });

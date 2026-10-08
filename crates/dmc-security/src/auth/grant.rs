@@ -4,7 +4,7 @@ use crate::auth::identity::IdentityId;
 use crate::auth::{Action, Resource};
 use crate::{Error, Result};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Grant {
     pub identity_id: IdentityId,
     pub resource: Resource,
@@ -39,6 +39,18 @@ impl GrantStore {
 
     pub fn grants(&self) -> &[Grant] {
         &self.grants
+    }
+
+    /// Remove a grant; returns whether it existed.
+    pub fn revoke(&mut self, identity_id: &IdentityId, resource: &Resource, action: Action) -> bool {
+        let before = self.grants.len();
+        self.grants
+            .retain(|g| !(g.identity_id == *identity_id && g.resource == *resource && g.action == action));
+        before != self.grants.len()
+    }
+
+    pub fn for_identity(&self, identity_id: &IdentityId) -> Vec<Grant> {
+        self.grants.iter().filter(|g| g.identity_id == *identity_id).cloned().collect()
     }
 
     pub fn replace(&mut self, grants: Vec<Grant>) {

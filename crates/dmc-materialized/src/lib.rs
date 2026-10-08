@@ -8,6 +8,7 @@ mod event_log;
 mod materializer;
 mod merge;
 mod persist;
+pub mod sealed_io;
 mod statistics_catalog;
 mod statistics_refresh;
 
@@ -15,18 +16,21 @@ pub mod protect;
 
 pub use error::{Error, Result};
 pub use event_log::{
-    event_id_for_sequence, write_state_event_log, FileStateEventLog, MemoryStateEventLog,
-    StateEventLog, StateEventRecord, STATE_EVENT_LOG_FORMAT_VERSION,
+    event_id_for_sequence, write_state_event_log, write_state_event_log_with, FileStateEventLog,
+    MemoryStateEventLog, StateEventLog, StateEventRecord, EVENT_LOG_CONTEXT,
+    STATE_EVENT_LOG_FORMAT_VERSION,
 };
 pub use materializer::{
-    rebuild_materialized_from_event_log, Materializer, StateMaterializer,
+    rebuild_materialized_from_event_log, rebuild_materialized_from_event_log_with, Materializer,
+    StateMaterializer,
 };
 pub use merge::{merge_state_event_records, state_event_from_journal_payload};
 pub use persist::{
-    load_materialized_snapshot, save_materialized_snapshot, MaterializedStateSnapshot,
-    MATERIALIZED_SNAPSHOT_FORMAT_VERSION,
+    load_materialized_snapshot, load_materialized_snapshot_with, save_materialized_snapshot,
+    save_materialized_snapshot_with, MaterializedStateSnapshot, StorageGenerations,
+    MATERIALIZED_SNAPSHOT_FORMAT_VERSION, SNAPSHOT_CONTEXT,
 };
-pub use statistics_catalog::{save_statistics_catalog, StatisticsCatalog};
+pub use statistics_catalog::{save_statistics_catalog, StatisticsCatalog, STATISTICS_CONTEXT};
 pub use statistics_refresh::{
     statistics_refresh_plan, StatisticsLifecycleAction, StatisticsRefreshPlan,
 };

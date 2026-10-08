@@ -9,7 +9,10 @@ use dmc_vault::ownership::ClientKeyEnvelope;
 
 pub fn root_of(code: &RecoveryCode) -> [u8; 32] {
     let parts: Vec<&str> = code.as_str().split('-').collect();
-    hex::decode(parts[1..9].concat()).unwrap().try_into().unwrap()
+    hex::decode(parts[1..9].concat())
+        .unwrap()
+        .try_into()
+        .unwrap()
 }
 
 /// X25519 (HPKE KEM) private key of `version`.
@@ -31,8 +34,11 @@ pub fn kem_private_key(root: &[u8; 32], version: u32) -> Vec<u8> {
 pub fn auth_seed(root: &[u8; 32], version: u32) -> Vec<u8> {
     let hk = hkdf::Hkdf::<sha2::Sha256>::new(None, root);
     let mut seed = [0u8; 32];
-    hk.expand(format!("avrora/client-owned/ed25519/v1/kv{version}").as_bytes(), &mut seed)
-        .unwrap();
+    hk.expand(
+        format!("avrora/client-owned/ed25519/v1/kv{version}").as_bytes(),
+        &mut seed,
+    )
+    .unwrap();
     seed.to_vec()
 }
 
@@ -43,8 +49,15 @@ pub fn dek_from(env: &ClientKeyEnvelope, root: &[u8; 32], kem_version: u32) -> V
     let sk = <K as hpke::Kem>::PrivateKey::from_bytes(&kem_private_key(root, kem_version)).unwrap();
     let enc = <K as hpke::Kem>::EncappedKey::from_bytes(&env.enc).unwrap();
     let b = env.binding();
-    hpke::single_shot_open::<hpke::aead::AesGcm256, hpke::kdf::HkdfSha256, K>(&OpModeR::Base, &sk, &enc, &b, &env.ciphertext, &b)
-        .unwrap()
+    hpke::single_shot_open::<hpke::aead::AesGcm256, hpke::kdf::HkdfSha256, K>(
+        &OpModeR::Base,
+        &sk,
+        &enc,
+        &b,
+        &env.ciphertext,
+        &b,
+    )
+    .unwrap()
 }
 
 #[derive(Default)]
@@ -54,8 +67,12 @@ impl Secrets {
     /// Raw, lowercase hex and uppercase hex encodings.
     pub fn add(&mut self, label: &str, bytes: &[u8]) {
         self.0.push((format!("{label}(raw)"), bytes.to_vec()));
-        self.0.push((format!("{label}(hex)"), hex::encode(bytes).into_bytes()));
-        self.0.push((format!("{label}(HEX)"), hex::encode_upper(bytes).into_bytes()));
+        self.0
+            .push((format!("{label}(hex)"), hex::encode(bytes).into_bytes()));
+        self.0.push((
+            format!("{label}(HEX)"),
+            hex::encode_upper(bytes).into_bytes(),
+        ));
     }
 
     pub fn add_text(&mut self, label: &str, s: &str) {

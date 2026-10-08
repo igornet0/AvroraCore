@@ -83,6 +83,9 @@ pub struct BackupInfo {
 pub struct BackupCreateResult {
     pub backup_id: String,
     pub checkpoint_sequence: u64,
+    /// D4-E: SHA-256 (hex) of the backup's authenticated `manifest.sealed` (empty for an
+    /// unencrypted backup) — what a client keeps to authorize an emergency restore.
+    pub manifest_sealed_sha256: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

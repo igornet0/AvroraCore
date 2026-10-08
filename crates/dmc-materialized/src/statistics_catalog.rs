@@ -15,10 +15,21 @@ use crate::error::{Error, Result};
 const STATISTICS_FILE: &str = "statistics.json";
 
 /// In-memory statistics catalog with optional disk persistence.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// Logical name bound into the AAD of encrypted statistics (D4-A).
+pub const STATISTICS_CONTEXT: &str = "statistics.json";
+
+#[derive(Clone, Debug, Default)]
 pub struct StatisticsCatalog {
     tables: BTreeMap<TableId, TableStatistics>,
     storage_root: Option<PathBuf>,
+    /// D4-A: statistics are value-derived (min/max …) and sealed when a cipher is set.
+    cipher: Option<std::sync::Arc<dmc_vault::StorageCipher>>,
+}
+
+impl PartialEq for StatisticsCatalog {
+    fn eq(&self, other: &Self) -> bool {
+        self.tables == other.tables && self.storage_root == other.storage_root
+    }
 }
 
 impl StatisticsCatalog {
@@ -29,16 +40,39 @@ impl StatisticsCatalog {
     /// Open or create catalog under `storage_root/statistics.json`.
     /// Missing file → empty catalog (valid fallback for optimiser).
     pub fn open(storage_root: impl Into<PathBuf>) -> Result<Self> {
+        Self::open_with(storage_root, None)
+    }
+
+    /// Open with the D4-A storage cipher (rules: [`crate::sealed_io`]).
+    pub fn open_with(
+        storage_root: impl Into<PathBuf>,
+        cipher: Option<std::sync::Arc<dmc_vault::StorageCipher>>,
+    ) -> Result<Self> {
         let storage_root = storage_root.into();
         let path = Self::statistics_path(&storage_root);
         if !path.is_file() {
             return Ok(Self {
                 tables: BTreeMap::new(),
                 storage_root: Some(storage_root),
+                cipher,
             });
         }
         let raw = std::fs::read(&path).map_err(|e| Error::Io(e.to_string()))?;
-        let snapshot = statistics_snapshot_from_bytes(&raw).map_err(map_model_error)?;
+        let plain = crate::sealed_io::decode_file(
+            &raw,
+            cipher.as_deref(),
+            dmc_vault::StoragePurpose::Statistics,
+            STATISTICS_CONTEXT,
+            "statistics",
+        )?;
+        if plain.is_empty() {
+            return Ok(Self {
+                tables: BTreeMap::new(),
+                storage_root: Some(storage_root),
+                cipher,
+            });
+        }
+        let snapshot = statistics_snapshot_from_bytes(&plain).map_err(map_model_error)?;
         if snapshot.format_version != STATISTICS_SNAPSHOT_FORMAT_VERSION {
             return Err(Error::Corrupt(format!(
                 "unsupported statistics version {}",
@@ -48,6 +82,7 @@ impl StatisticsCatalog {
         Ok(Self {
             tables: snapshot.into_map().map_err(map_model_error)?,
             storage_root: Some(storage_root),
+            cipher,
         })
     }
 
@@ -113,14 +148,22 @@ impl StatisticsCatalog {
         let Some(root) = self.storage_root.clone() else {
             return Err(Error::Io("statistics catalog has no storage root".into()));
         };
-        *self = Self::open(root)?;
+        *self = Self::open_with(root, self.cipher.clone())?;
         Ok(())
     }
 }
 
 pub fn save_statistics_catalog(path: &Path, catalog: &StatisticsCatalog) -> Result<()> {
+    crate::sealed_io::refuse_plaintext_over_sealed(path, catalog.cipher.as_deref(), "statistics")?;
     let snapshot = catalog.snapshot()?;
-    let raw = statistics_snapshot_to_bytes(&snapshot).map_err(map_model_error)?;
+    let plain =
+        zeroize::Zeroizing::new(statistics_snapshot_to_bytes(&snapshot).map_err(map_model_error)?);
+    let raw = crate::sealed_io::encode_file(
+        &plain,
+        catalog.cipher.as_deref(),
+        dmc_vault::StoragePurpose::Statistics,
+        STATISTICS_CONTEXT,
+    )?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| Error::Io(e.to_string()))?;
     }

@@ -657,7 +657,8 @@ fn health_axes_vault_independent_diagnostics_readonly() {
     let d0 = diagnostics(&mut state, 3, &conn);
     assert_eq!(d0.vault, "locked");
     assert_eq!(d0.readiness, "ready");
-    assert_eq!(d0.journal_lag, Some(0));
+    // D4-F: locked ⇒ SQL storage not opened ⇒ no journal state is read or reported
+    assert_eq!(d0.journal_lag, None);
 
     let (sid, binding) = auth_pair(&mut state, 4, &conn);
     unlock(&mut state, 5, &conn, &sid, &binding, master);
@@ -684,6 +685,7 @@ fn health_axes_vault_independent_diagnostics_readonly() {
     assert_eq!(d1.recovery_state.as_deref(), Some("recovering"));
     // Diagnostics does not unlock / mutate vault.
     assert_eq!(d1.vault, "unlocked");
+    assert_eq!(d1.journal_lag, Some(0), "open storage reports the journal");
 
     // Clear recovery overlay file → Ready again; diagnostics still read-only.
     let _ = fs::remove_file(dir.path().join(RECOVERY_STATE_FILE));
@@ -818,9 +820,10 @@ fn acceptance_lifecycle_observability_does_not_become_sot() {
     let d = diagnostics(&mut state, 15, &conn);
     assert_eq!(d.vault, "locked");
     assert_eq!(d.readiness, "ready");
-    assert_eq!(d.journal_tip, Some(tip_before_backup));
-    assert_eq!(d.materialized_sequence, Some(tip_before_backup));
-    assert_eq!(d.journal_lag, Some(0));
+    // D4-F: lock closes SQL storage — the journal is no longer read or reported
+    assert_eq!(d.journal_tip, None);
+    assert_eq!(d.materialized_sequence, None);
+    assert_eq!(d.journal_lag, None);
     assert_eq!(d.logging, ObservabilityComponentStatus::Available.as_str());
     assert_surface_clean("lifecycle diagnostics", &d);
 

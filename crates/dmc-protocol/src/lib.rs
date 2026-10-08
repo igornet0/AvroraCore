@@ -21,7 +21,7 @@ pub use limits::{
     DEFAULT_MAX_UNLOCK_BLOB_SIZE,
 };
 pub use message::{
-    ClientGrantWire,
+    ClientGrantWire, PrivilegeActionWire, PrivilegeResourceWire, PrivilegeWire,
     BackupListItem, ControlRequest, ControlResponse, DataRequest, DataResponse, DiagnosticsWire,
     HandshakeRequest, HandshakeResponse, RequestEnvelope, ResponseEnvelope, ResponseStatus,
     SqlCell, SqlParam, SqlRow, SqlResult, VaultStateWire,
@@ -35,7 +35,8 @@ pub use runtime::{
 };
 pub use unlock_blob::{
     unlock_blob_aad, validate_unlock_blob, UnlockBlob, UNLOCK_BLOB_NONCE_LEN,
-    UNLOCK_BLOB_VERSION, UNLOCK_MATERIAL_LEN,
+    UNLOCK_BLOB_VERSION, UNLOCK_BLOB_VERSION_ANCHORED, UNLOCK_BLOB_VERSION_RESTORE,
+    UNLOCK_MATERIAL_LEN, UNLOCK_RESTORE_AUTHORIZATION_LEN,
 };
 pub use validate::{validate_control_request, validate_data_request};
 

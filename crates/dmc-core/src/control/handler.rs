@@ -1,12 +1,13 @@
-use avrora_proto::{ControlMsg, SESSION_TTL_SECS, read_msg, write_msg};
+use avrora_proto::{ControlMsg, MAX_FRAME, SESSION_TTL_SECS, decode_body, write_msg};
 use dmc_protocol::{ProtocolErrorCode, validate_unlock_blob, UnlockBlob};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rand::RngCore;
 use std::path::PathBuf;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use zeroize::Zeroize;
 
 use crate::control::ControlState;
+use crate::control::core_tunnel;
 use crate::control::devices::DeviceRecord;
 use crate::control::init::{consume_bootstrap_token, read_bootstrap_token};
 use crate::control::tls::issue_client_cert;
@@ -43,17 +44,52 @@ where
         }
     }
 
+    // CLIENT_OWNED tunnel channel of this TLS connection (D5); closed on every exit path.
+    let channel = core_tunnel::new_channel();
+    let result = connection_loop(stream, &state, &mut conn, &channel).await;
+    core_tunnel::close(&state.core, &channel);
+    result
+}
+
+async fn read_frame<S: AsyncRead + Unpin>(stream: &mut S) -> std::io::Result<Vec<u8>> {
+    let mut len_buf = [0u8; 4];
+    stream.read_exact(&mut len_buf).await?;
+    let len = u32::from_be_bytes(len_buf);
+    if len == 0 || len > MAX_FRAME {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "frame size"));
+    }
+    let mut body = vec![0u8; len as usize];
+    stream.read_exact(&mut body).await?;
+    Ok(body)
+}
+
+async fn connection_loop<S>(
+    stream: &mut S,
+    state: &ControlState,
+    conn: &mut ConnState,
+    channel: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let mut core_request_id = 0u64;
     loop {
-        let msg = match read_msg(stream).await {
-            Ok(m) => m,
-            Err(e) => {
-                if e.to_string().contains("early eof") || e.to_string().contains("UnexpectedEof") {
-                    return Ok(());
-                }
-                return Err(e.into());
-            }
+        let body = match read_frame(stream).await {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
+            Err(e) => return Err(e.into()),
         };
-        let reply = dispatch(&state, &mut conn, msg).await;
+        if let Some(frame) = core_tunnel::parse(&body) {
+            core_request_id += 1;
+            let reply = core_tunnel::handle(state.core.clone(), channel.to_string(), core_request_id, frame).await;
+            let json = serde_json::to_vec(&reply)?;
+            stream.write_all(&(json.len() as u32).to_be_bytes()).await?;
+            stream.write_all(&json).await?;
+            stream.flush().await?;
+            continue;
+        }
+        let msg = decode_body(&body)?;
+        let reply = dispatch(state, conn, msg).await;
         write_msg(stream, &reply).await?;
         if matches!(reply, ControlMsg::Error { .. }) && conn.pending.is_none() {
             // keep connection for more requests unless fatal bootstrap

@@ -19,7 +19,13 @@ hex = "0.4"
 [dev-dependencies]
 dmc-client-crypto = { path = "../crates/dmc-client-crypto" }
 dmc-http-co = { path = "../crates/dmc-http-co" }
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "io-util", "time"] }
+dmc-core = { path = "../crates/dmc-core" }
+dmc-ops = { path = "../crates/dmc-ops" }
+rustls = { version = "0.23", features = ["ring"] }
+rustls-pemfile = "2"
+tokio-rustls = "0.26"
+totp-rs = { version = "6.0.0", features = ["otpauth", "gen_secret"] }
 dmc-observability = { path = "../crates/dmc-observability" }
 dmc-security = { path = "../crates/dmc-security" }
 dmc-vault = { path = "../crates/dmc-vault" }

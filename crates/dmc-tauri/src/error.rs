@@ -100,7 +100,8 @@ impl FrontendError {
             | ProtocolErrorCode::UnlockBlobInvalid
             | ProtocolErrorCode::UnlockBlobReplay
             | ProtocolErrorCode::UnlockSessionMismatch
-            | ProtocolErrorCode::LegacyUnlockDisabled => FrontendErrorCode::UnlockFailed,
+            | ProtocolErrorCode::LegacyUnlockDisabled
+            | ProtocolErrorCode::StorageRollbackDetected => FrontendErrorCode::UnlockFailed,
             ProtocolErrorCode::AuthorizationDenied => FrontendErrorCode::AuthorizationDenied,
             ProtocolErrorCode::InvalidSql => FrontendErrorCode::InvalidSql,
             ProtocolErrorCode::TransactionConflict => FrontendErrorCode::TransactionConflict,

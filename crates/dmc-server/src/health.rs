@@ -59,7 +59,9 @@ fn compute_health(state: &CoreServerState) -> HealthStatus {
 }
 
 fn readiness_when_core_ready(state: &CoreServerState) -> (Readiness, Option<ReadinessReasonCode>) {
-    if state.ctx.journal().is_none() {
+    // Sealed storage (vault locked, D4-A) is a normal state: SQL is refused with
+    // VaultLocked until unlock, the Core itself is ready.
+    if state.ctx.journal().is_none() && !state.storage_sealed() {
         return (
             Readiness::NotReady,
             Some(ReadinessReasonCode::JournalUnavailable),

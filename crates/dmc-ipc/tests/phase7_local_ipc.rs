@@ -287,7 +287,10 @@ mod unix_tests {
     }
 
     #[test]
-    fn reconnect_and_session_survives_disconnect() {
+    /// D5 (replaces the Phase-7 "session survives disconnect" contract): a session is
+    /// bound to its connection. After reconnecting, the old session id is refused and the
+    /// client authenticates again; durable data is unaffected.
+    fn reconnect_requires_new_authentication() {
         let dir = tempdir().unwrap();
         let socket = dir.path().join("test.sock");
         let (_state, handle) = spawn_server(dir.path(), socket.clone());
@@ -316,15 +319,15 @@ mod unix_tests {
                 session_id: session_id.clone(),
             })
             .unwrap();
-        let info_body = expect_ok_control(info).unwrap();
-        match info_body {
-            ControlResponse::SessionInfo { active, .. } => assert!(active),
-            other => panic!("unexpected {other:?}"),
-        }
-
-        let select = client
+        assert_eq!(info.error_code, Some(ProtocolErrorCode::SessionInvalid));
+        let stale = client
             .execute_sql(&session_id, "SELECT id FROM items")
             .unwrap();
+        assert_eq!(stale.error_code, Some(ProtocolErrorCode::SessionInvalid));
+
+        let auth = client.authenticate("analyst", "pw").unwrap();
+        let fresh = session_from_auth(auth);
+        let select = client.execute_sql(&fresh, "SELECT id FROM items").unwrap();
         assert_eq!(select.status, ResponseStatus::Ok);
         client.close().unwrap();
         drop(handle);

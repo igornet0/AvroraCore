@@ -164,7 +164,8 @@ pub fn classify_protocol(code: ProtocolErrorCode) -> FailureClass {
         | ProtocolErrorCode::BackupTargetNotEmpty
         | ProtocolErrorCode::RecoveryNotReady
         | ProtocolErrorCode::BackupNotFound
-        | ProtocolErrorCode::Unsupported => FailureClass::RejectOnly,
+        | ProtocolErrorCode::Unsupported
+        | ProtocolErrorCode::StorageRollbackDetected => FailureClass::RejectOnly,
         // InternalError on wire stays reject-only for a live Core — fatal paths use Startup/Shutdown.
         ProtocolErrorCode::InternalError => FailureClass::RejectOnly,
     }
@@ -182,7 +183,8 @@ pub fn classify_startup(err: &StartupError) -> FailureClass {
         | StartupError::RecoveryMetadata(_)
         | StartupError::Recovery(_)
         | StartupError::Lifecycle(_)
-        | StartupError::Io(_) => FailureClass::Fatal,
+        | StartupError::Io(_)
+        | StartupError::Identity(_) => FailureClass::Fatal,
     }
 }
 

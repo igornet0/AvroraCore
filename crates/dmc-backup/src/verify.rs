@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use dmc_model::Catalog;
+use dmc_vault::StorageCipher;
 use serde::{Deserialize, Serialize};
 
 use crate::artifact::{
@@ -21,6 +22,12 @@ use crate::digest::sha256_file;
 use crate::error::{BackupError, Result};
 use crate::manifest::{BackupManifest, BACKUP_MANIFEST_FORMAT_VERSION, MANIFEST_FILE};
 use crate::publish::STAGE_DIR_PREFIX;
+use crate::sealed::{
+    authenticate_manifest, check_sealed_manifest_presence, read_component, BackupKeys,
+    SEALED_OWNERSHIP_FILES,
+};
+
+const CONTENT_DEFERRED: &str = "content sealed: verified only with storage keys";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -71,7 +78,18 @@ impl BackupVerification {
 ///
 /// Returns [`BackupVerification`] with `valid == false` for corrupt artifacts.
 /// Returns [`Err`] only when the path cannot be inspected (e.g. not a directory).
+///
+/// Keyless: for an encrypted backup (D4-A) only structure, digests and "every content
+/// component is sealed" are checked — content checks need [`verify_backup_with`].
 pub fn verify_backup(path: &Path) -> Result<BackupVerification> {
+    verify_backup_with(path, None)
+}
+
+/// [`verify_backup`] with the storage keys: an encrypted backup's `manifest.json` must
+/// equal its authenticated copy (so every listed digest is authentic), and sealed
+/// components are decrypted in memory for the full content checks. A plaintext backup
+/// is refused with keys (explicit migration only). Never writes anything.
+pub fn verify_backup_with(path: &Path, cipher: Option<&StorageCipher>) -> Result<BackupVerification> {
     if !path.is_dir() {
         return Err(BackupError::Io(format!(
             "backup path is not a directory: {}",
@@ -114,12 +132,15 @@ pub fn verify_backup(path: &Path) -> Result<BackupVerification> {
     };
 
     if let Some(ref m) = manifest {
-        components.push(verify_journal_component(path, m, &mut errors));
-        components.push(verify_catalog_component(path, m, &mut errors));
+        let keys = cipher.map(|c| BackupKeys::for_manifest(c, m));
+        verify_encryption(path, m, keys.as_ref(), &mut errors);
+        components.push(verify_journal_component(path, m, keys.as_ref(), &mut errors));
+        components.push(verify_catalog_component(path, m, keys.as_ref(), &mut errors));
         components.push(verify_storage_component(path, m, &mut errors));
         components.push(verify_recovery_component(path, m, &mut errors));
         verify_file_digest_index(path, m, &mut errors);
-        verify_cross_component_n(path, m, &mut errors);
+        crate::keystore::verify(path, m, &mut errors);
+        verify_cross_component_n(path, m, keys.as_ref(), &mut errors);
     } else {
         // Still report component slots as invalid/missing when possible.
         for (comp, rel) in [
@@ -159,6 +180,62 @@ pub fn verify_backup(path: &Path) -> Result<BackupVerification> {
         components,
         errors,
     })
+}
+
+/// D4-A: encryption declaration, authenticated manifest and sealed-ness of every
+/// value- or credential-bearing file.
+fn verify_encryption(
+    root: &Path,
+    manifest: &BackupManifest,
+    keys: Option<&BackupKeys<'_>>,
+    errors: &mut Vec<String>,
+) {
+    if let Err(e) = check_sealed_manifest_presence(root, manifest) {
+        errors.push(e.to_string());
+    }
+    if !manifest.encrypted {
+        if keys.is_some() {
+            errors.push(
+                "plaintext backup on encrypted storage: explicit migration required".into(),
+            );
+        }
+        return;
+    }
+    if manifest.backup_id.is_empty() {
+        errors.push("encrypted backup without backup id".into());
+    }
+    if let Some(k) = keys {
+        if let Err(e) = authenticate_manifest(root, manifest, k) {
+            errors.push(e.to_string());
+        }
+    }
+    for rel in SEALED_OWNERSHIP_FILES {
+        let path = root.join(rel);
+        if path.is_file() {
+            let sealed = fs::read(&path)
+                .map(|raw| dmc_vault::storage_cipher::looks_sealed(&raw))
+                .unwrap_or(false);
+            if !sealed {
+                errors.push(format!("encrypted backup holds plaintext component {rel}"));
+            }
+        }
+    }
+    for entry in manifest
+        .files
+        .iter()
+        .filter(|f| f.role == crate::manifest::BackupFileRole::StorageSegment)
+    {
+        let version = fs::read(root.join(&entry.relative_path))
+            .ok()
+            .filter(|raw| raw.len() >= dmc_storage::SEGMENT_HEADER_LEN)
+            .map(|raw| u32::from_le_bytes(raw[4..8].try_into().unwrap()));
+        if version != Some(dmc_storage::SEGMENT_VERSION_SEALED) {
+            errors.push(format!(
+                "encrypted backup holds plaintext row segment {}",
+                entry.relative_path
+            ));
+        }
+    }
 }
 
 fn read_manifest(path: &Path) -> Result<BackupManifest> {
@@ -239,6 +316,7 @@ fn verify_manifest_component(path: &Path, errors: &mut Vec<String>) -> Component
 fn verify_journal_component(
     root: &Path,
     manifest: &BackupManifest,
+    keys: Option<&BackupKeys<'_>>,
     errors: &mut Vec<String>,
 ) -> ComponentVerification {
     let n = manifest.checkpoint_sequence;
@@ -290,6 +368,7 @@ fn verify_journal_component(
     let mut prev_last: Option<u64> = None;
     let mut global_max = 0u64;
     let mut global_events = 0u64;
+    let mut content_deferred = false;
 
     for seg in &sorted_segs {
         let path = root.join(&seg.relative_path);
@@ -316,8 +395,18 @@ fn verify_journal_component(
             detail = Some(msg);
         }
 
-        let file: JournalSegmentFile = match read_json(&path) {
-            Ok(v) => v,
+        let file: JournalSegmentFile = match read_component(
+            root,
+            &seg.relative_path,
+            manifest.encrypted,
+            keys,
+        ) {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                content_deferred = true;
+                detail.get_or_insert_with(|| CONTENT_DEFERRED.to_string());
+                continue;
+            }
             Err(e) => {
                 ok = false;
                 // Truncated / malformed segment body.
@@ -397,7 +486,7 @@ fn verify_journal_component(
         global_events += file.events.len() as u64;
     }
 
-    if n > 0 && global_max != n {
+    if n > 0 && global_max != n && !content_deferred {
         ok = false;
         let msg = format!("journal max sequence {global_max} != N {n}");
         errors.push(msg.clone());
@@ -437,6 +526,7 @@ fn verify_journal_component(
 fn verify_catalog_component(
     root: &Path,
     manifest: &BackupManifest,
+    keys: Option<&BackupKeys<'_>>,
     errors: &mut Vec<String>,
 ) -> ComponentVerification {
     let n = manifest.checkpoint_sequence;
@@ -471,8 +561,11 @@ fn verify_catalog_component(
         }
     }
 
-    match read_json::<CatalogArtifact>(&path) {
-        Ok(cat) => {
+    match read_component::<CatalogArtifact>(root, "catalog/catalog.json", manifest.encrypted, keys) {
+        Ok(None) => {
+            detail = Some(CONTENT_DEFERRED.to_string());
+        }
+        Ok(Some(cat)) => {
             if cat.format_version != CATALOG_ARTIFACT_FORMAT_VERSION {
                 ok = false;
                 let msg = format!("unsupported catalog format {}", cat.format_version);
@@ -735,7 +828,12 @@ fn verify_file_digest_index(root: &Path, manifest: &BackupManifest, errors: &mut
     }
 }
 
-fn verify_cross_component_n(root: &Path, manifest: &BackupManifest, errors: &mut Vec<String>) {
+fn verify_cross_component_n(
+    root: &Path,
+    manifest: &BackupManifest,
+    keys: Option<&BackupKeys<'_>>,
+    errors: &mut Vec<String>,
+) {
     let n = manifest.checkpoint_sequence;
     // Re-read lightweight checkpoints (already validated per-component; this is the N diamond).
     if let Ok(j) = read_json::<JournalArtifact>(&root.join("journal/manifest.json")) {
@@ -743,7 +841,9 @@ fn verify_cross_component_n(root: &Path, manifest: &BackupManifest, errors: &mut
             errors.push(format!("cross-check: journal tip {} != N {n}", j.tip_sequence));
         }
     }
-    if let Ok(c) = read_json::<CatalogArtifact>(&root.join("catalog/catalog.json")) {
+    if let Ok(Some(c)) =
+        read_component::<CatalogArtifact>(root, "catalog/catalog.json", manifest.encrypted, keys)
+    {
         if c.checkpoint_sequence != n {
             errors.push(format!(
                 "cross-check: catalog {} != N {n}",

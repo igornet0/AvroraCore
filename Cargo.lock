@@ -1005,7 +1005,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-backup"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dmc-materialized",
  "dmc-model",
@@ -1022,11 +1022,12 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.20",
+ "zeroize",
 ]
 
 [[package]]
 name = "dmc-bench"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "avrora-client",
  "avrora-proto",
@@ -1058,7 +1059,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-catalog"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dmc-model",
  "thiserror 2.0.20",
@@ -1066,7 +1067,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-cli"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "clap",
  "dmc-client",
@@ -1074,6 +1075,7 @@ dependencies = [
  "dmc-ipc",
  "dmc-materialized",
  "dmc-ops",
+ "dmc-pgwire",
  "dmc-protocol",
  "dmc-runtime",
  "dmc-security",
@@ -1090,13 +1092,14 @@ dependencies = [
 
 [[package]]
 name = "dmc-client"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dmc-ipc",
  "dmc-protocol",
  "dmc-remote",
  "dmc-server",
  "dmc-vault",
+ "hex",
  "rcgen 0.14.9",
  "tempfile",
  "thiserror 2.0.20",
@@ -1106,7 +1109,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-client-crypto"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dmc-vault",
  "ed25519-dalek",
@@ -1124,7 +1127,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-core"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "aes-gcm",
  "avrora-client",
@@ -1169,7 +1172,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-ddl"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dmc-catalog",
  "dmc-model",
@@ -1178,15 +1181,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "dmc-http-co"
+version = "0.0.4"
+dependencies = [
+ "axum",
+ "dmc-protocol",
+ "dmc-security",
+ "dmc-server",
+ "dmc-vault",
+ "hex",
+ "rand 0.10.2",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "dmc-integration-tests"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dmc-backup",
  "dmc-client",
  "dmc-client-crypto",
+ "dmc-core",
+ "dmc-http-co",
  "dmc-ipc",
  "dmc-materialized",
  "dmc-observability",
+ "dmc-ops",
  "dmc-protocol",
  "dmc-runtime",
  "dmc-security",
@@ -1197,14 +1219,19 @@ dependencies = [
  "hex",
  "hkdf",
  "hpke",
+ "rustls",
+ "rustls-pemfile",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "totp-rs",
 ]
 
 [[package]]
 name = "dmc-ipc"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dmc-materialized",
  "dmc-model",
@@ -1218,7 +1245,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-journal"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "ciborium",
  "crc32c",
@@ -1234,13 +1261,14 @@ dependencies = [
 
 [[package]]
 name = "dmc-materialized"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dmc-journal",
  "dmc-model",
  "dmc-security",
  "dmc-storage",
  "dmc-vault",
+ "hex",
  "serde",
  "serde_json",
  "tempfile",
@@ -1250,7 +1278,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-model"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -1260,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-observability"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -1269,8 +1297,9 @@ dependencies = [
 
 [[package]]
 name = "dmc-ops"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
+ "base64",
  "dmc-backup",
  "dmc-materialized",
  "dmc-model",
@@ -1283,8 +1312,11 @@ dependencies = [
  "dmc-sql-exec",
  "dmc-sql-phys",
  "dmc-sql-plan",
+ "dmc-vault",
+ "hex",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.20",
  "toml",
@@ -1292,18 +1324,27 @@ dependencies = [
 
 [[package]]
 name = "dmc-pgwire"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
+ "dmc-backup",
+ "dmc-client-crypto",
  "dmc-core",
+ "dmc-ops",
+ "dmc-protocol",
+ "dmc-security",
+ "dmc-server",
  "dmc-sql",
  "dmc-vault",
+ "hex",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
 ]
 
 [[package]]
 name = "dmc-protocol"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dmc-vault",
  "postcard",
@@ -1313,7 +1354,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-remote"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dmc-observability",
  "dmc-protocol",
@@ -1329,7 +1370,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-runtime"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "chrono",
  "dmc-vault",
@@ -1342,7 +1383,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-security"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dmc-vault",
  "ed25519-dalek",
@@ -1362,7 +1403,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-server"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "aes-gcm",
  "dmc-backup",
@@ -1391,7 +1432,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-sql"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "chrono",
  "dmc-storage",
@@ -1406,7 +1447,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-sql-bind"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dmc-model",
  "dmc-sql-front",
@@ -1415,7 +1456,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-sql-exec"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dmc-materialized",
  "dmc-model",
@@ -1431,7 +1472,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-sql-front"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dmc-model",
  "thiserror 2.0.20",
@@ -1439,7 +1480,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-sql-phys"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dmc-model",
  "dmc-sql-bind",
@@ -1450,7 +1491,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-sql-plan"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dmc-model",
  "dmc-sql-bind",
@@ -1460,7 +1501,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-storage"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "crc32fast",
  "dmc-model",
@@ -1470,11 +1511,12 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
+ "zeroize",
 ]
 
 [[package]]
 name = "dmc-tauri"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dmc-client",
  "dmc-ipc",
@@ -1494,7 +1536,7 @@ dependencies = [
 
 [[package]]
 name = "dmc-vault"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "aes-gcm",
  "argon2",

@@ -442,6 +442,8 @@ async fn tauri_backup_create_verify_restore_recover() {
         .authenticate("analyst".into(), "pw".into())
         .await
         .unwrap();
+    // D4-F: storage (and so a backup) opens only after VaultUnlock
+    bridge.vault_unlock("ui-password".into()).await.unwrap();
 
     let created = bridge
         .backup_create("ui1".into(), false)

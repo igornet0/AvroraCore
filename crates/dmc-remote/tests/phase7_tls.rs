@@ -230,7 +230,7 @@ fn tls_unauthenticated_data_and_authz_denied() {
 }
 
 #[test]
-fn tls_sql_e2e_and_reconnect_transaction() {
+fn tls_sql_e2e_and_reconnect_requires_new_session() {
     let stack = dev_tls_stack("127.0.0.1");
     let dir = tempdir().unwrap();
     let state = Arc::new(Mutex::new(bootstrap_core_state_unlocked_for_test(dir.path(), false)));
@@ -272,19 +272,30 @@ fn tls_sql_e2e_and_reconnect_transaction() {
     let mut client =
         TlsRemoteClient::connect_dev(addr, stack.client, RemoteLimits::default()).unwrap();
     client.handshake("tls-e2e-b").unwrap();
-    client
+    // D5 + F8: the old session died with its connection; its open transaction was
+    // rolled back. The client re-authenticates and runs a new transaction.
+    let commit = client
         .data(DataRequest::Commit {
             session_id: session_id.clone(),
         })
         .unwrap();
-    let select = client
-        .execute_sql(&session_id, "SELECT id FROM items WHERE id = 3")
-        .unwrap();
-    let body = expect_ok_data(select).unwrap();
-    match body {
-        dmc_protocol::DataResponse::SqlResult(result) => assert_eq!(result.rows.len(), 1),
+    assert_eq!(commit.error_code, Some(ProtocolErrorCode::SessionInvalid));
+    let fresh = session_from_auth(client.authenticate("analyst", "pw").unwrap());
+    let rows = |client: &mut TlsRemoteClient, sid: &str| match expect_ok_data(
+        client.execute_sql(sid, "SELECT id FROM items WHERE id = 3").unwrap(),
+    )
+    .unwrap()
+    {
+        dmc_protocol::DataResponse::SqlResult(result) => result.rows.len(),
         other => panic!("unexpected {other:?}"),
-    }
+    };
+    assert_eq!(rows(&mut client, &fresh), 0, "orphan transaction rolled back");
+    client.data(DataRequest::Begin { session_id: fresh.clone() }).unwrap();
+    client
+        .execute_sql(&fresh, "INSERT INTO items (id, name) VALUES (3, 'gamma')")
+        .unwrap();
+    client.data(DataRequest::Commit { session_id: fresh.clone() }).unwrap();
+    assert_eq!(rows(&mut client, &fresh), 1);
     client.close().unwrap();
     drop(handle);
 }

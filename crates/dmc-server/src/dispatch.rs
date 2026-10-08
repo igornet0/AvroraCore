@@ -10,7 +10,7 @@ use dmc_sql_exec::{
 };
 
 use crate::state::CoreServerState;
-use crate::unlock_blob::open_unlock_blob;
+use crate::unlock_blob::open_unlock_blob_full;
 use crate::unlock_gate::VaultState;
 
 pub fn handle_control(
@@ -54,6 +54,14 @@ fn handle_control_inner(
     }
     // D5: every session check during this request is bound to this connection.
     state.auth.begin_request(connection_id);
+    let ddl_session = runtime_session_id(&env.body).to_string();
+    if !ddl_session.is_empty()
+        && let Err(msg) = state.transaction_guard(&ddl_session)
+    {
+        state.auth.end_request();
+        state.end_in_flight_request();
+        return Ok(ResponseEnvelope::err(request_id, ProtocolErrorCode::TransactionConflict, msg));
+    }
     let result = handle_control_body(state, env, limits, connection_id, request_id, ctx_base, ctx_sess);
     state.auth.end_request();
     state.end_in_flight_request();
@@ -229,6 +237,7 @@ fn handle_control_body(
                     request_id,
                     ControlResponse::VaultStatus {
                         state: vault_state_wire(state.vault_state()),
+                        generation: state.storage_generation().unwrap_or(0),
                     },
                 )),
                 Err(resp) => Ok(resp),
@@ -292,7 +301,7 @@ fn handle_control_body(
                     ));
                 }
             };
-            let material = match open_unlock_blob(&blob, &binding_key) {
+            let opened = match open_unlock_blob_full(&blob, &binding_key) {
                 Ok(m) => m,
                 Err(ProtocolError::Wire { code, message }) => {
                     return Ok(ResponseEnvelope::err(request_id, code, message));
@@ -305,14 +314,19 @@ fn handle_control_body(
                     ));
                 }
             };
-            match state.apply_vault_unlock(&material) {
-                Ok(()) => {
+            match state.apply_vault_unlock_authorized(
+                &opened.material,
+                opened.min_generation,
+                opened.restore_authorization.as_ref(),
+            ) {
+                Ok(generation) => {
                     state.mark_unlock_blob(&session_id, blob.nonce);
                     crate::observe::emit_vault_unlock(state, ctx_sess(&session_id));
                     Ok(ResponseEnvelope::ok(
                         request_id,
                         ControlResponse::VaultUnlock {
                             state: VaultStateWire::Unlocked,
+                            generation,
                         },
                     ))
                 }
@@ -344,6 +358,28 @@ fn handle_control_body(
         | ControlRequest::ClientAuthBegin { .. }
         | ControlRequest::ClientAuthFinish { .. }) => {
             Ok(crate::ownership_ops::handle(state, request_id, req))
+        }
+        req @ (ControlRequest::PrivilegeGrant { .. }
+        | ControlRequest::PrivilegeRevoke { .. }
+        | ControlRequest::PrivilegeList { .. }) => {
+            Ok(crate::privilege_ops::handle(state, request_id, connection_id, req))
+        }
+        ControlRequest::StorageMigrateEncrypt {
+            session_id,
+            blob,
+            purge_plaintext_backups,
+        } => {
+            if let Err(resp) = require_vault_session(state, request_id, &session_id) {
+                return Ok(resp);
+            }
+            Ok(crate::storage_migration_ops::handle(
+                state,
+                request_id,
+                connection_id,
+                &session_id,
+                &blob,
+                purge_plaintext_backups,
+            ))
         }
         ControlRequest::BackupCreate {
             session_id,
@@ -583,7 +619,14 @@ fn handle_data_inner(
         return Ok(map_limit_err_data(request_id, err));
     }
     state.auth.begin_request(connection_id);
+    let session_id = match &env.body {
+        DataRequest::ExecuteSql { session_id, .. }
+        | DataRequest::Begin { session_id }
+        | DataRequest::Commit { session_id }
+        | DataRequest::Rollback { session_id } => session_id.clone(),
+    };
     let result = handle_data_body(state, env, limits, connection_id, request_id);
+    state.sync_transaction_owner(&session_id);
     state.auth.end_request();
     state.end_in_flight_request();
     result
@@ -641,6 +684,11 @@ fn handle_data_body(
             ));
         }
     };
+
+    // F8: a transaction belongs to the session that opened it.
+    if let Err(msg) = state.transaction_guard(&session_id) {
+        return Ok(ResponseEnvelope::err(request_id, ProtocolErrorCode::TransactionConflict, msg));
+    }
 
     // Session validated → correlation may include session_id (not an auth proof).
     let mk_ctx = |state: &CoreServerState| {
@@ -882,18 +930,37 @@ fn value_to_cell(value: Value) -> SqlCell {
         SqlCell {
             value: "NULL".into(),
             is_null: true,
+            text: String::new(),
         }
     } else if let Value::Binary(bytes) = &value {
         // Lossless bytea-style hex (`\x…`), so sealed values survive the wire unchanged.
+        let hex = format!("\\x{}", hex::encode(bytes));
         SqlCell {
-            value: format!("\\x{}", hex::encode(bytes)),
+            value: hex.clone(),
             is_null: false,
+            text: hex,
         }
     } else {
         SqlCell {
             value: format!("{value:?}"),
             is_null: false,
+            text: value_text(&value),
         }
+    }
+}
+
+/// PostgreSQL text output of a non-NULL value (dates / timestamps are the engine's integer
+/// encodings, rendered as such).
+fn value_text(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::Boolean(b) => if *b { "t" } else { "f" }.to_string(),
+        Value::Int(n) | Value::BigInt(n) => n.to_string(),
+        Value::Double(d) => d.to_string(),
+        Value::String(s) | Value::Decimal(s) => s.clone(),
+        Value::Binary(b) => format!("\\x{}", hex::encode(b)),
+        Value::Date(d) => d.to_string(),
+        Value::Timestamp(t) => t.to_string(),
     }
 }
 

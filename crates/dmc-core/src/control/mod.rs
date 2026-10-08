@@ -5,6 +5,7 @@ pub mod backup_config;
 pub mod backup_targets;
 pub mod capability_rotation_config;
 mod commands;
+pub mod core_tunnel;
 mod data;
 pub mod dev;
 mod devo_init;
@@ -68,6 +69,8 @@ pub struct ControlState {
     pub auth: AuthManager,
     pub devices: DeviceRegistry,
     pub sessions: ControlSessions,
+    /// Shared SQL core for the CLIENT_OWNED tunnel (`None`: tunnel refuses every frame).
+    pub core: Option<core_tunnel::SharedCore>,
 }
 
 pub fn install_crypto_provider() {
@@ -92,6 +95,7 @@ pub async fn serve(
         runtime,
         auth,
         sessions,
+        core: None,
     };
 
     let listener = TcpListener::bind(addr).await?;
@@ -117,6 +121,34 @@ pub async fn serve_listener(
     }
 }
 
+/// Like [`bind`], with the CLIENT_OWNED tunnel connected to `core` (the same state DMC IPC
+/// and the HTTP adapter serve).
+pub async fn bind_with_core(
+    addr: SocketAddr,
+    data_dir: PathBuf,
+    runtime: Runtime,
+    auth: AuthManager,
+    sessions: ControlSessions,
+    core: core_tunnel::SharedCore,
+) -> std::io::Result<(SocketAddr, impl Future<Output = std::io::Result<()>>)> {
+    install_crypto_provider();
+    let tls = load_server_tls(&data_dir)
+        .map_err(|e| std::io::Error::other(e))?;
+    let acceptor = TlsAcceptor::from(Arc::new(tls));
+    let state = ControlState {
+        devices: DeviceRegistry::open(data_dir.join("devices.json"))
+            .map_err(|e| std::io::Error::other(e))?,
+        data_dir,
+        runtime,
+        auth,
+        sessions,
+        core: Some(core),
+    };
+    let listener = TcpListener::bind(addr).await?;
+    let bound = listener.local_addr()?;
+    Ok((bound, serve_listener(listener, acceptor, state)))
+}
+
 /// Bind and serve; returns the bound address after spawn-ready bind.
 pub async fn bind(
     addr: SocketAddr,
@@ -136,6 +168,7 @@ pub async fn bind(
         runtime,
         auth,
         sessions,
+        core: None,
     };
     let listener = TcpListener::bind(addr).await?;
     let bound = listener.local_addr()?;

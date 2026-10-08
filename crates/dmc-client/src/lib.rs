@@ -6,7 +6,7 @@
 mod client;
 mod control;
 mod error;
-mod keypass;
+pub mod keypass;
 mod runtime;
 mod session;
 mod sql;

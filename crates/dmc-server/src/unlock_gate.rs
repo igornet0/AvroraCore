@@ -40,6 +40,20 @@ impl std::fmt::Debug for UnlockGate {
 
 impl UnlockGate {
     /// New vault, locked, with one-time master for KeyPass wrap.
+    /// Persistent vault at `path` (see [`VaultRuntime::open_or_create`]).
+    pub fn open_or_create(path: &std::path::Path) -> Result<(Self, Option<UnlockMaterial>), ProtocolError> {
+        let (vault, master) = VaultRuntime::open_or_create(path)?;
+        Ok((Self { vault }, master))
+    }
+
+    pub fn storage_cipher(&mut self) -> Result<dmc_vault::StorageCipher, ProtocolError> {
+        self.vault.storage_cipher()
+    }
+
+    pub fn storage_dek(&mut self, path: &str) -> Result<dmc_vault::KeyMaterial, ProtocolError> {
+        self.vault.storage_dek(path)
+    }
+
     pub fn create_locked() -> Result<(Self, UnlockMaterial), ProtocolError> {
         let (vault, master) = VaultRuntime::create_locked()?;
         Ok((Self { vault }, master))

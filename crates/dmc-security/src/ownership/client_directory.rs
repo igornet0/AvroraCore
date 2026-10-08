@@ -356,13 +356,17 @@ impl ClientKeyDirectory {
     /// re-encrypt client-side for that.
     pub fn revoke(&mut self, auth: &AuthService, owner_session: &SessionId, grantee: SubjectId) -> Result<bool> {
         let p = client_principal(auth, owner_session)?;
+        if grantee == p.subject {
+            // own envelopes (OwnDataKey) are not a delegation and must never be deleted here
+            return Err(Error::Conflict("cannot revoke a grant to oneself".into()));
+        }
         let before = self.file.grants.len() + self.file.envelopes.len();
         self.file
             .grants
             .retain(|g| !(g.owner == p.subject && g.grantee == grantee));
-        self.file
-            .envelopes
-            .retain(|e| !(e.owner == p.subject && e.recipient == grantee));
+        self.file.envelopes.retain(|e| {
+            !(e.kind == ClientEnvelopeKind::DelegatedDataKey && e.owner == p.subject && e.recipient == grantee)
+        });
         let changed = before != self.file.grants.len() + self.file.envelopes.len();
         if changed {
             self.persist()?;

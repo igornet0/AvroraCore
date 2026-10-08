@@ -21,7 +21,7 @@ use crate::runtime::{DbStatus, Runtime};
 use crate::server::state::AppState;
 use dmc_ipc::{default_socket_path, CoreServer, SocketPathOptions};
 use dmc_security::{AuthManager, ui_auth_path};
-use dmc_server::{bootstrap_core_state_locked_with_hub, UnlockMaterial};
+use dmc_server::{bootstrap_core_state_persistent_with_hub, UnlockMaterial};
 
 /// HTTP admin + control plane, and co-host DMC IPC on the same [`Runtime::hub`].
 pub async fn run(addr: SocketAddr, ui_dist: Option<PathBuf>) -> Result<(), std::io::Error> {
@@ -133,10 +133,20 @@ fn spawn_dmc_ipc_adapter(paths: &control::AvroraPaths, hub: dmc_runtime::Runtime
         .map(PathBuf::from)
         .unwrap_or_else(default_socket_path);
 
-    let (state, master) = bootstrap_core_state_locked_with_hub(&dmc_root, true, hub);
-    let master_path = dmc_root.join(".dmc-dev-master.hex");
-    if let Err(e) = write_master_hex(&master_path, &master) {
-        eprintln!("DMC IPC: write master failed: {e}");
+    // D4-F: persistent key store; storage opened only on VaultUnlock, sealed at rest. The
+    // dev unlock file is written when the key store is created and stays valid after.
+    let (state, master) = match bootstrap_core_state_persistent_with_hub(&dmc_root, true, hub) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("DMC IPC: vault key store unusable: {e}");
+            return;
+        }
+    };
+    if let Some(master) = master {
+        let master_path = dmc_root.join(".dmc-dev-master.hex");
+        if let Err(e) = write_master_hex(&master_path, &master) {
+            eprintln!("DMC IPC: write master failed: {e}");
+        }
     }
 
     let state = Arc::new(Mutex::new(state));
@@ -156,14 +166,9 @@ fn spawn_dmc_ipc_adapter(paths: &control::AvroraPaths, hub: dmc_runtime::Runtime
         if ready_tx.send(Ok(())).is_err() {
             return;
         }
-        loop {
-            let mut guard = match state.lock() {
-                Ok(g) => g,
-                Err(e) => e.into_inner(),
-            };
-            if server.accept_and_serve_one(&mut guard).is_err() {
-                break;
-            }
+        // One failing client must not stop the adapter; only a broken listener does.
+        if let Err(e) = server.serve_forever_shared(&state, |e| eprintln!("DMC IPC: connection closed with error: {e}")) {
+            eprintln!("DMC IPC: listener failed, adapter stopping: {e}");
         }
     });
 

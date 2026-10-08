@@ -61,7 +61,54 @@ pub struct RestoreResult {
 /// 5. Atomic `rename(staging → target)`
 ///
 /// Does **not** replay journal, unlock vault, or restore sessions.
+///
+/// D4-A: an encrypted backup is copied as ciphertext — nothing is decrypted, no key is
+/// needed or used. Its recorded identity must be the requested backup id (a backup put
+/// in place of another is refused here; a re-labelled one fails authentication on
+/// recovery, where the keys are required).
 pub fn restore_backup(backup_path: &Path, target: &Path) -> Result<RestoreResult> {
+    restore_inner(backup_path, target, None)
+}
+
+/// D4-C: production restore. On top of [`restore_backup`]: the backup must be encrypted,
+/// pass the keyed (authenticated) verification, and be exactly the one registered under
+/// its id in this installation's backup registry (`registry_root`: the live storage root).
+/// The staged target receives a sealed restore attestation before it becomes visible.
+/// Copies ciphertext only; never unlocks anything (the caller already holds the keys).
+pub fn restore_backup_registered(
+    backup_path: &Path,
+    target: &Path,
+    registry_root: &Path,
+    cipher: &dmc_vault::StorageCipher,
+) -> Result<RestoreResult> {
+    restore_inner(backup_path, target, Some((registry_root, cipher)))
+}
+
+/// D4-E (variant B): keyless staging of a backup into an empty data root on a host that no
+/// longer has the source installation (and so no registry). Only an encrypted backup that
+/// carries its key store is staged; nothing is decrypted and no attestation is written —
+/// the target recovers only after the client authorizes exactly this artifact at unlock
+/// ([`crate::authorize_emergency_restore`]).
+pub fn stage_emergency_restore(backup_path: &Path, target: &Path) -> Result<RestoreResult> {
+    let manifest: BackupManifest = read_json(&backup_path.join(MANIFEST_FILE))?;
+    if !manifest.encrypted {
+        return Err(BackupError::BackupInvalid(
+            "only an encrypted backup can be restored".into(),
+        ));
+    }
+    if crate::keystore::entry(&manifest)?.is_none() {
+        return Err(BackupError::BackupInvalid(
+            "backup does not carry its key store".into(),
+        ));
+    }
+    restore_inner(backup_path, target, None)
+}
+
+fn restore_inner(
+    backup_path: &Path,
+    target: &Path,
+    registered: Option<(&Path, &dmc_vault::StorageCipher)>,
+) -> Result<RestoreResult> {
     // 1. Verify first — never mutate target on invalid backup.
     let verification = verify_backup(backup_path)?;
     if !verification.valid {
@@ -74,6 +121,28 @@ pub fn restore_backup(backup_path: &Path, target: &Path) -> Result<RestoreResult
 
     let backup_id = verification.backup_id.clone();
     let checkpoint_sequence = verification.checkpoint_sequence;
+    let manifest: BackupManifest = read_json(&backup_path.join(MANIFEST_FILE))?;
+    if manifest.encrypted && manifest.backup_id != backup_id {
+        return Err(BackupError::BackupInvalid(
+            "backup identity does not match the requested backup id".into(),
+        ));
+    }
+    // D4-C: authenticated + registered, before the target is touched
+    let entry = match registered {
+        Some((root, cipher)) => {
+            if !manifest.encrypted {
+                return Err(BackupError::BackupInvalid(
+                    "unencrypted backup: explicit migration required".into(),
+                ));
+            }
+            crate::verify::verify_backup_with(backup_path, Some(cipher))?
+                .ensure_valid()
+                .map_err(|e| BackupError::BackupInvalid(e.to_string()))?;
+            let registry = crate::registry::BackupRegistry::load(root, cipher)?;
+            Some((registry.confirm(backup_path, &manifest)?, cipher))
+        }
+        None => None,
+    };
 
     // 2. Empty-target policy.
     ensure_empty_or_absent(target)?;
@@ -109,6 +178,13 @@ pub fn restore_backup(backup_path: &Path, target: &Path) -> Result<RestoreResult
             )));
         }
         assert_no_runtime_secrets(&staging)?;
+        if let Some((entry, cipher)) = &entry {
+            // the copy is the registered artifact, then vouch for it (sealed)
+            if crate::registry::manifest_sealed_hash(&staging)? != entry.manifest_sealed_sha256 {
+                return Err(BackupError::Corrupt("staged copy differs from the backup".into()));
+            }
+            crate::registry::write_attestation(&staging, &backup_id, entry, cipher)?;
+        }
         Ok(())
     })();
 
@@ -173,6 +249,11 @@ fn copy_artifact_tree(src: &Path, dst: &Path) -> Result<()> {
         return Err(BackupError::Corrupt("backup missing manifest.json".into()));
     }
     fs::copy(&manifest_src, dst.join(MANIFEST_FILE)).map_err(|e| BackupError::Io(e.to_string()))?;
+    let sealed_manifest = src.join(crate::sealed::SEALED_MANIFEST_FILE);
+    if sealed_manifest.is_file() {
+        fs::copy(&sealed_manifest, dst.join(crate::sealed::SEALED_MANIFEST_FILE))
+            .map_err(|e| BackupError::Io(e.to_string()))?;
+    }
 
     for sub in ["journal", "catalog", "storage", "recovery"] {
         let from = src.join(sub);
@@ -188,6 +269,13 @@ fn copy_artifact_tree(src: &Path, dst: &Path) -> Result<()> {
         copy_dir_all(
             &src.join(crate::ownership::OWNERSHIP_DIR),
             &dst.join(crate::ownership::OWNERSHIP_DIR),
+        )?;
+    }
+    // D4-E: the installation's key store (wrapped keys only) travels with the target.
+    if src.join(crate::keystore::KEY_STORE_DIR).is_dir() {
+        copy_dir_all(
+            &src.join(crate::keystore::KEY_STORE_DIR),
+            &dst.join(crate::keystore::KEY_STORE_DIR),
         )?;
     }
 
@@ -245,10 +333,16 @@ fn assert_no_runtime_secrets(root: &Path) -> Result<()> {
     }
 
     // Load component checkpoints for RestoreResult consumers / tests.
-    let _manifest: BackupManifest = serde_json::from_str(&raw)
+    let manifest: BackupManifest = serde_json::from_str(&raw)
         .map_err(|e| BackupError::Corrupt(e.to_string()))?;
     let _journal: JournalArtifact = read_json(&root.join("journal/manifest.json"))?;
-    let _catalog: CatalogArtifact = read_json(&root.join("catalog/catalog.json"))?;
+    // Keyless: a sealed catalog is only checked to be sealed, never decrypted here.
+    let _catalog: Option<CatalogArtifact> = crate::sealed::read_component(
+        root,
+        "catalog/catalog.json",
+        manifest.encrypted,
+        None,
+    )?;
     let _storage: StorageArtifact = read_json(&root.join("storage/manifest.json"))?;
     let _recovery: RecoveryArtifact = read_json(&root.join("recovery/metadata.json"))?;
     Ok(())

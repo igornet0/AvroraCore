@@ -1,9 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use dmc_materialized::{StateEventRecord, StateMaterializer};
 use dmc_model::{ApplyMode, Catalog, CatalogApplier, StateEvent};
 use dmc_storage::{read_manifest, table_dir};
+use dmc_vault::StorageCipher;
+use zeroize::Zeroizing;
 
 use crate::artifact::{
     CatalogArtifact, JournalArtifact, JournalSegmentFile, JournalSegmentRef, RecoveryArtifact,
@@ -16,6 +19,7 @@ use crate::error::{BackupError, Result};
 use crate::manifest::{
     BackupFileRole, BackupManifest, BackupStorageTableEntry, MANIFEST_FILE,
 };
+use crate::sealed::{write_component, write_sealed_manifest, BackupKeys};
 use crate::source::BackupSource;
 use crate::verify::verify_written_artifact;
 
@@ -75,14 +79,27 @@ impl BackupWriter for DefaultBackupWriter {
             fs::create_dir_all(staging.join(sub)).map_err(|e| BackupError::Io(e.to_string()))?;
         }
 
-        let journal_files = write_journal(staging, n, &events)?;
+        // D4-A: with storage keys every value-bearing component is sealed and bound to
+        // this backup's identity (database ‖ backup id ‖ N ‖ path).
+        let keys = source
+            .cipher()
+            .map(|c| BackupKeys::new(c, &manifest.database_id, &backup_id, n));
+        let journal_files = write_journal(staging, n, &events, keys.as_ref())?;
         let catalog = catalog_at(&events, n)?;
-        let catalog_files = write_catalog(staging, n, &catalog)?;
-        let (storage_files, storage_art) =
-            write_storage(staging, n, &catalog, &events, manifest.options.include_rowstore)?;
+        let catalog_files = write_catalog(staging, n, &catalog, keys.as_ref())?;
+        let (storage_files, storage_art) = write_storage(
+            staging,
+            n,
+            &catalog,
+            &events,
+            manifest.options.include_rowstore,
+            source.cipher().cloned(),
+        )?;
         let recovery_files = write_recovery(staging, manifest)?;
 
         let mut out_manifest = manifest.clone();
+        out_manifest.encrypted = keys.is_some();
+        out_manifest.backup_id = backup_id.clone();
         out_manifest.files = Vec::new();
         out_manifest.files.extend(journal_files);
         out_manifest.files.extend(catalog_files);
@@ -135,6 +152,9 @@ impl BackupWriter for DefaultBackupWriter {
             .retain(|f| f.role != BackupFileRole::Manifest);
         write_json_atomic(&manifest_path, &publish_manifest)?;
         let (_, manifest_digest) = sha256_file(&manifest_path)?;
+        if let Some(k) = &keys {
+            write_sealed_manifest(staging, &publish_manifest, k)?;
+        }
 
         verify_written_artifact(staging, &publish_manifest)?;
 
@@ -152,6 +172,7 @@ fn write_journal(
     staging: &Path,
     n: u64,
     events: &[StateEventRecord],
+    keys: Option<&BackupKeys<'_>>,
 ) -> Result<Vec<crate::manifest::BackupFileEntry>> {
     let segment_rel = "journal/segments/000001.json";
     let segment_path = staging.join(segment_rel);
@@ -163,7 +184,11 @@ fn write_journal(
         last_sequence: last,
         events: events.to_vec(),
     };
-    write_json_atomic(&segment_path, &segment)?;
+    let plain = Zeroizing::new(
+        serde_json::to_vec_pretty(&segment).map_err(|e| BackupError::Validation(e.to_string()))?,
+    );
+    drop(segment);
+    write_component(staging, segment_rel, &plain, keys)?;
     let (size, checksum) = sha256_file(&segment_path)?;
     if last != n {
         return Err(BackupError::Validation(format!(
@@ -229,6 +254,7 @@ fn write_catalog(
     staging: &Path,
     n: u64,
     catalog: &Catalog,
+    keys: Option<&BackupKeys<'_>>,
 ) -> Result<Vec<crate::manifest::BackupFileEntry>> {
     let artifact = CatalogArtifact {
         format_version: CATALOG_ARTIFACT_FORMAT_VERSION,
@@ -236,7 +262,10 @@ fn write_catalog(
         catalog: catalog.to_snapshot_body(),
     };
     let path = staging.join("catalog/catalog.json");
-    write_json_atomic(&path, &artifact)?;
+    let plain = Zeroizing::new(
+        serde_json::to_vec_pretty(&artifact).map_err(|e| BackupError::Validation(e.to_string()))?,
+    );
+    write_component(staging, "catalog/catalog.json", &plain, keys)?;
     Ok(vec![file_entry(
         "catalog/catalog.json",
         BackupFileRole::Catalog,
@@ -250,6 +279,7 @@ fn write_storage(
     catalog: &Catalog,
     events: &[StateEventRecord],
     include_segments: bool,
+    cipher: Option<Arc<StorageCipher>>,
 ) -> Result<(Vec<crate::manifest::BackupFileEntry>, StorageArtifact)> {
     let mut files = Vec::new();
     let mut tables = Vec::new();
@@ -258,7 +288,68 @@ fn write_storage(
     if include_segments {
         let rebuild_root = staging.join(".rebuild_rows");
         fs::create_dir_all(&rebuild_root).map_err(|e| BackupError::Io(e.to_string()))?;
-        let mut mat = StateMaterializer::in_memory(&rebuild_root);
+        let rebuilt = copy_rebuilt_tables(
+            staging,
+            &rebuild_root,
+            n,
+            catalog,
+            events,
+            cipher,
+            &mut files,
+            &mut tables,
+            &mut segment_refs,
+        );
+        // The rebuild tree is scratch (sealed when keys are given): removed on every path.
+        let _ = fs::remove_dir_all(&rebuild_root);
+        rebuilt?;
+    } else {
+        // Metadata-only: table ids present in catalog @ N, no RowStore bytes.
+        for table in catalog.tables() {
+            tables.push(BackupStorageTableEntry {
+                table_id: table.id.raw(),
+                manifest_generation: 0,
+                format_version: dmc_storage::STORAGE_MANIFEST_FORMAT_VERSION,
+                next_row_id: table.next_row_id.raw(),
+            });
+        }
+    }
+    tables.sort_by_key(|t| t.table_id);
+
+    let artifact = StorageArtifact {
+        format_version: STORAGE_ARTIFACT_FORMAT_VERSION,
+        checkpoint_sequence: n,
+        include_segments,
+        tables: tables.clone(),
+        segments: segment_refs,
+    };
+    let path = staging.join("storage/manifest.json");
+    write_json_atomic(&path, &artifact)?;
+    files.push(file_entry(
+        "storage/manifest.json",
+        BackupFileRole::Storage,
+        &path,
+    )?);
+    Ok((files, artifact))
+}
+
+/// Rebuild row stores @ N from the frozen events (with the storage keys, so segments and
+/// every scratch file are sealed) and copy each table into the artifact.
+#[allow(clippy::too_many_arguments)]
+fn copy_rebuilt_tables(
+    staging: &Path,
+    rebuild_root: &Path,
+    n: u64,
+    catalog: &Catalog,
+    events: &[StateEventRecord],
+    cipher: Option<Arc<StorageCipher>>,
+    files: &mut Vec<crate::manifest::BackupFileEntry>,
+    tables: &mut Vec<BackupStorageTableEntry>,
+    segment_refs: &mut Vec<StorageSegmentRef>,
+) -> Result<()> {
+    {
+        let rebuild_root = rebuild_root.to_path_buf();
+        let mut mat = StateMaterializer::in_memory_with_cipher(&rebuild_root, cipher)
+            .map_err(|e| BackupError::Validation(format!("storage rebuild: {e}")))?;
         for record in events {
             mat.apply_record(record, ApplyMode::Replay)
                 .map_err(|e| BackupError::Validation(format!("storage rebuild: {e}")))?;
@@ -296,6 +387,15 @@ fn write_storage(
                 BackupFileRole::Storage,
                 &dst.join("manifest.json"),
             )?);
+            // D4-B: the authenticated table manifest travels (and is digest-listed) too
+            let sealed = dst.join(dmc_storage::SEALED_MANIFEST_FILE);
+            if sealed.is_file() {
+                files.push(file_entry(
+                    format!("{rel_table}/{}", dmc_storage::SEALED_MANIFEST_FILE),
+                    BackupFileRole::Storage,
+                    &sealed,
+                )?);
+            }
 
             let segments_dir = dst.join("segments");
             if segments_dir.is_dir() {
@@ -332,35 +432,8 @@ fn write_storage(
                 }
             }
         }
-        let _ = fs::remove_dir_all(&rebuild_root);
-    } else {
-        // Metadata-only: table ids present in catalog @ N, no RowStore bytes.
-        for table in catalog.tables() {
-            tables.push(BackupStorageTableEntry {
-                table_id: table.id.raw(),
-                manifest_generation: 0,
-                format_version: dmc_storage::STORAGE_MANIFEST_FORMAT_VERSION,
-                next_row_id: table.next_row_id.raw(),
-            });
-        }
     }
-    tables.sort_by_key(|t| t.table_id);
-
-    let artifact = StorageArtifact {
-        format_version: STORAGE_ARTIFACT_FORMAT_VERSION,
-        checkpoint_sequence: n,
-        include_segments,
-        tables: tables.clone(),
-        segments: segment_refs,
-    };
-    let path = staging.join("storage/manifest.json");
-    write_json_atomic(&path, &artifact)?;
-    files.push(file_entry(
-        "storage/manifest.json",
-        BackupFileRole::Storage,
-        &path,
-    )?);
-    Ok((files, artifact))
+    Ok(())
 }
 
 fn write_recovery(

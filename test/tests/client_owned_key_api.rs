@@ -545,16 +545,20 @@ fn key_management_and_client_owned_sql_over_dmc_ipc_reveal_no_secrets() {
     let backup_path = data_root.join("backups/backup-kb1");
     assert!(backup_path.is_dir(), "{}", backup_path.display());
     let restored = dir.path().join("new-host/restore");
+    // D4-F: the backup is also sealed with the installation's storage keys — the attacker
+    // here holds the Master Key, hence those keys too (still only CLIENT_OWNED ciphertext)
+    let storage_keys = Arc::new(shared.lock().unwrap().unlock_gate.storage_cipher().unwrap());
     dmc_backup::restore_backup(&backup_path, &restored).unwrap();
-    dmc_backup::recover(&restored).unwrap();
+    dmc_backup::recover_with(&restored, Some(storage_keys.clone())).unwrap();
     let live = restored.join(dmc_backup::LIVE_DIR);
     assert!(live.join("ownership/client/client-directory.json").is_file());
     assert!(live.join("rows/sealed_columns.json").is_file());
 
-    let mat = dmc_materialized::StateMaterializer::open_recovered(
+    let mat = dmc_materialized::StateMaterializer::open_recovered_with_cipher(
         live.join("rows"),
         live.join("materialized_snapshot.json"),
         live.join("state_events.json"),
+        Some(storage_keys),
     )
     .unwrap();
     let catalog = mat.catalog().clone();

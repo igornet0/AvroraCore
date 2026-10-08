@@ -105,7 +105,10 @@ impl AuthService {
         tenant: &TenantId,
     ) -> Option<(u32, [u8; 32])> {
         let identity = self.identities().get_by_subject(subject)?;
-        if identity.custody != KeyCustody::Client || identity.tenant.as_ref() != Some(tenant) || !identity.is_active() {
+        if identity.custody != KeyCustody::Client
+            || identity.tenant.as_ref() != Some(tenant)
+            || !identity.is_active()
+        {
             return None;
         }
         let bundle = dir.active_bundle(subject)?;
@@ -127,7 +130,9 @@ impl AuthService {
         let now = self.sessions().now_ms();
         self.challenges.prune(now);
         if self.challenges.pending.len() >= MAX_PENDING {
-            return Err(Error::Conflict("too many pending authentication challenges".into()));
+            return Err(Error::Conflict(
+                "too many pending authentication challenges".into(),
+            ));
         }
         let auth = self.eligible_auth_key(dir, subject, &tenant);
         let mut nonce = [0u8; 32];
@@ -168,7 +173,10 @@ impl AuthService {
         let pending = self.challenges.pending.remove(&nonce).ok_or_else(failed)?;
         let c = &pending.challenge;
         let now = self.sessions().now_ms();
-        if self.request_channel() != Some(c.channel.as_str()) || c.transport != transport || now >= c.expires_at_ms {
+        if self.request_channel() != Some(c.channel.as_str())
+            || c.transport != transport
+            || now >= c.expires_at_ms
+        {
             return Err(failed());
         }
         let key = pending.auth_key.ok_or_else(failed)?;
@@ -204,7 +212,10 @@ impl AuthService {
         body: &[u8],
         signature: &[u8],
     ) -> Result<String> {
-        let session = self.sessions().validate_session(session_id).map_err(|_| failed())?;
+        let session = self
+            .sessions()
+            .validate_session(session_id)
+            .map_err(|_| failed())?;
         self.require_live_identity(&session).map_err(|_| failed())?;
         let channel = session
             .channel
@@ -214,16 +225,22 @@ impl AuthService {
         let (Some(subject), Some(version)) = (session.subject, session.auth_key_version) else {
             return Err(failed());
         };
+        // Signed by the subject's ACTIVE auth key: the session survives the owner's own
+        // rotation (as on DMC), but a rotated-out key can no longer drive it.
         let bundle = dir.active_bundle(subject).ok_or_else(failed)?;
         let key = bundle
             .auth_public_key
-            .filter(|_| bundle.key_version == version)
+            .filter(|_| bundle.key_version >= version)
             .ok_or_else(failed)?;
         let statement = http_request_statement(session_id.as_str(), seq, method, path, body);
         if !verify_signature(&key, &statement, signature) {
             return Err(failed());
         }
-        let last = self.challenges.http_seq.entry(session_id.as_str().to_string()).or_insert(0);
+        let last = self
+            .challenges
+            .http_seq
+            .entry(session_id.as_str().to_string())
+            .or_insert(0);
         if seq <= *last {
             return Err(failed());
         }

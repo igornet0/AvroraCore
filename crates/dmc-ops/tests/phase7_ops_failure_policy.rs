@@ -279,7 +279,7 @@ fn reject_only_does_not_touch_journal_vault_session() {
     )
     .unwrap();
     grant_analyst(&mut started.server);
-    let master = started.unlock_material.clone();
+    let master = started.unlock_material.clone().expect("a fresh key store issues the Master Key once");
     let (sid, binding) = auth_pair(&mut started.server, 1);
     unlock(&mut started.server, 2, &sid, &binding, &master);
     let tip = started.server.ctx.journal().unwrap().tip_sequence();
@@ -304,7 +304,7 @@ fn not_ready_does_not_lock_or_unlock_vault() {
     )
     .unwrap();
     grant_analyst(&mut started.server);
-    let master = started.unlock_material.clone();
+    let master = started.unlock_material.clone().expect("a fresh key store issues the Master Key once");
     let (sid, binding) = auth_pair(&mut started.server, 1);
     unlock(&mut started.server, 2, &sid, &binding, &master);
     assert!(started.server.root_dek_present());
@@ -326,7 +326,7 @@ fn fatal_wipes_secrets_and_rejects_work() {
     )
     .unwrap();
     grant_analyst(&mut started.server);
-    let master = started.unlock_material.clone();
+    let master = started.unlock_material.clone().expect("a fresh key store issues the Master Key once");
     let (sid, binding) = auth_pair(&mut started.server, 1);
     unlock(&mut started.server, 2, &sid, &binding, &master);
 
@@ -383,7 +383,7 @@ fn acceptance_reject_only_then_fatal() {
     assert_started_invariants(&started);
 
     grant_analyst(&mut started.server);
-    let master = started.unlock_material.clone();
+    let master = started.unlock_material.clone().expect("a fresh key store issues the Master Key once");
     let (sid, binding) = auth_pair(&mut started.server, 1);
     unlock(&mut started.server, 2, &sid, &binding, &master);
 

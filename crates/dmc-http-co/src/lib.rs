@@ -28,7 +28,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use dmc_protocol::{ControlRequest, ControlResponse, DataRequest, RemoteLimits, RequestEnvelope};
 use dmc_security::auth::client_auth::HTTP_CHANNEL_PREFIX;
-use dmc_server::{handle_control, handle_data, CoreServerState};
+use dmc_server::{CoreServerState, handle_control, handle_data};
 use dmc_vault::ownership::{SubjectId, TenantId};
 use serde::{Deserialize, Serialize};
 
@@ -72,7 +72,13 @@ pub struct ErrorReply {
 }
 
 fn err(status: StatusCode, msg: &str) -> Response {
-    (status, Json(ErrorReply { error: msg.to_string() })).into_response()
+    (
+        status,
+        Json(ErrorReply {
+            error: msg.to_string(),
+        }),
+    )
+        .into_response()
 }
 
 fn refuse() -> Response {
@@ -88,33 +94,20 @@ fn lock(core: &SharedCore) -> std::sync::MutexGuard<'_, CoreServerState> {
     core.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-/// Requests reachable over HTTP. Everything else (password login, vault, backup,
-/// runtime, catalog administration) stays on DMC IPC / the operator planes.
+/// Requests reachable over HTTP (shared policy with the control-plane tunnel).
 pub fn control_allowed(req: &ControlRequest) -> bool {
-    matches!(
-        req,
-        ControlRequest::ClientKeyRegister { .. }
-            | ControlRequest::ClientKeyGet { .. }
-            | ControlRequest::ClientKeyRotate { .. }
-            | ControlRequest::KeyEnvelopePut { .. }
-            | ControlRequest::KeyEnvelopeGet { .. }
-            | ControlRequest::GrantCreate { .. }
-            | ControlRequest::GrantList { .. }
-            | ControlRequest::GrantRevoke { .. }
-            | ControlRequest::SealedColumnDeclare { .. }
-            | ControlRequest::Logout { .. }
-    )
+    dmc_server::transport_policy::client_owned_session_request(req)
 }
 
-fn check_peer(peer: &SocketAddr) -> Result<(), Response> {
-    if peer.ip().is_loopback() {
-        Ok(())
-    } else {
-        Err(err(StatusCode::FORBIDDEN, "loopback only"))
-    }
+/// `Some(403)` unless the peer is on the loopback interface.
+fn refuse_non_loopback(peer: &SocketAddr) -> Option<Response> {
+    (!peer.ip().is_loopback()).then(|| err(StatusCode::FORBIDDEN, "loopback only"))
 }
 
-async fn on_core<T: Send + 'static>(core: &SharedCore, f: impl FnOnce(&mut CoreServerState) -> T + Send + 'static) -> T {
+async fn on_core<T: Send + 'static>(
+    core: &SharedCore,
+    f: impl FnOnce(&mut CoreServerState) -> T + Send + 'static,
+) -> T {
     let core = core.clone();
     tokio::task::spawn_blocking(move || f(&mut lock(&core)))
         .await
@@ -126,7 +119,7 @@ async fn auth_begin(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(body): Json<AuthBeginBody>,
 ) -> Response {
-    if let Err(r) = check_peer(&peer) {
+    if let Some(r) = refuse_non_loopback(&peer) {
         return r;
     }
     let mut id = [0u8; 16];
@@ -163,7 +156,7 @@ async fn auth_finish(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(body): Json<AuthFinishBody>,
 ) -> Response {
-    if let Err(r) = check_peer(&peer) {
+    if let Some(r) = refuse_non_loopback(&peer) {
         return r;
     }
     let (Some(channel), Ok(nonce), Ok(signature)) = (
@@ -205,7 +198,7 @@ async fn enroll(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<ControlRequest>,
 ) -> Response {
-    if let Err(r) = check_peer(&peer) {
+    if let Some(r) = refuse_non_loopback(&peer) {
         return r;
     }
     if !matches!(req, ControlRequest::IdentityEnroll { .. }) {
@@ -217,7 +210,10 @@ async fn enroll(
     let resp = on_core(&core, move |s| {
         handle_control(
             s,
-            RequestEnvelope { request_id: 1, body: req },
+            RequestEnvelope {
+                request_id: 1,
+                body: req,
+            },
             &RemoteLimits::default(),
             &channel,
         )
@@ -230,7 +226,12 @@ async fn enroll(
 }
 
 /// Verify the per-request signature; returns the session's HTTP channel.
-fn verify_signed(s: &mut CoreServerState, headers: &HeaderMap, path: &str, body: &[u8]) -> Option<String> {
+fn verify_signed(
+    s: &mut CoreServerState,
+    headers: &HeaderMap,
+    path: &str,
+    body: &[u8],
+) -> Option<String> {
     let session = headers.get(HEADER_SESSION)?.to_str().ok()?.to_string();
     let seq: u64 = headers.get(HEADER_SEQ)?.to_str().ok()?.parse().ok()?;
     let signature = hex::decode(headers.get(HEADER_SIGNATURE)?.to_str().ok()?).ok()?;
@@ -245,7 +246,7 @@ async fn control(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(r) = check_peer(&peer) {
+    if let Some(r) = refuse_non_loopback(&peer) {
         return r;
     }
     let Ok(req) = serde_json::from_slice::<ControlRequest>(&body) else {
@@ -258,7 +259,10 @@ async fn control(
         let channel = verify_signed(s, &headers, PATH_CONTROL, &body)?;
         Some(handle_control(
             s,
-            RequestEnvelope { request_id: 1, body: req },
+            RequestEnvelope {
+                request_id: 1,
+                body: req,
+            },
             &RemoteLimits::default(),
             &channel,
         ))
@@ -277,7 +281,7 @@ async fn data(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(r) = check_peer(&peer) {
+    if let Some(r) = refuse_non_loopback(&peer) {
         return r;
     }
     let Ok(req) = serde_json::from_slice::<DataRequest>(&body) else {
@@ -287,7 +291,10 @@ async fn data(
         let channel = verify_signed(s, &headers, PATH_DATA, &body)?;
         Some(handle_data(
             s,
-            RequestEnvelope { request_id: 1, body: req },
+            RequestEnvelope {
+                request_id: 1,
+                body: req,
+            },
             &RemoteLimits::default(),
             &channel,
         ))

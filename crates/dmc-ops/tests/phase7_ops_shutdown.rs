@@ -272,7 +272,7 @@ fn active_transaction_successful_drain_after_commit() {
     let root = dir.path().join("data");
     let mut started = start_core(cfg_for(&root), StartupOptions::production()).unwrap();
     grant_analyst(&mut started.server);
-    let master = started.unlock_material.clone();
+    let master = started.unlock_material.clone().expect("a fresh key store issues the Master Key once");
     let (sid, binding) = auth_pair(&mut started.server, 1);
     unlock(&mut started.server, 2, &sid, &binding, &master);
 
@@ -309,7 +309,9 @@ fn active_transaction_successful_drain_after_commit() {
     let mut again = start_core(cfg_for(&root), StartupOptions::production()).unwrap();
     assert_started_invariants(&again);
     grant_analyst(&mut again.server);
-    let master2 = again.unlock_material.clone();
+    // D4-A: the key store persists — a restart issues no new Master Key
+    assert!(again.unlock_material.is_none());
+    let master2 = master.clone();
     let (sid2, binding2) = auth_pair(&mut again.server, 10);
     unlock(&mut again.server, 11, &sid2, &binding2, &master2);
     let rows = expect_ok_data(sql(
@@ -334,7 +336,7 @@ fn drain_timeout_rolls_back_never_commits() {
     let root = dir.path().join("data");
     let mut started = start_core(cfg_for(&root), StartupOptions::production()).unwrap();
     grant_analyst(&mut started.server);
-    let master = started.unlock_material.clone();
+    let master = started.unlock_material.clone().expect("a fresh key store issues the Master Key once");
     let (sid, binding) = auth_pair(&mut started.server, 1);
     unlock(&mut started.server, 2, &sid, &binding, &master);
     expect_ok_data(sql(
@@ -369,7 +371,9 @@ fn drain_timeout_rolls_back_never_commits() {
 
     let mut again = start_core(cfg_for(&root), StartupOptions::production()).unwrap();
     grant_analyst(&mut again.server);
-    let master2 = again.unlock_material.clone();
+    // D4-A: the key store persists — a restart issues no new Master Key
+    assert!(again.unlock_material.is_none());
+    let master2 = master.clone();
     let (sid2, binding2) = auth_pair(&mut again.server, 20);
     unlock(&mut again.server, 21, &sid2, &binding2, &master2);
     let tip_after = again.server.ctx.journal().unwrap().tip_sequence();
@@ -440,7 +444,7 @@ fn sessions_invalidated_and_vault_wiped() {
     )
     .unwrap();
     grant_analyst(&mut started.server);
-    let master = started.unlock_material.clone();
+    let master = started.unlock_material.clone().expect("a fresh key store issues the Master Key once");
     let (sid, binding) = auth_pair(&mut started.server, 1);
     unlock(&mut started.server, 2, &sid, &binding, &master);
     assert!(started.server.root_dek_present());
@@ -464,6 +468,8 @@ fn restart_after_clean_shutdown() {
     let dir = tempdir().unwrap();
     let root = dir.path().join("data");
     let mut started = start_core(cfg_for(&root), StartupOptions::production()).unwrap();
+    let master = started.unlock_material.clone().expect("a fresh key store issues the Master Key once");
+    started.server.apply_vault_unlock(&master).unwrap();
     let tip = started.server.ctx.journal().unwrap().tip_sequence();
     shutdown_core(
         &mut started,
@@ -473,10 +479,12 @@ fn restart_after_clean_shutdown() {
     .unwrap();
     drop(started);
 
-    let again = start_core(cfg_for(&root), StartupOptions::production()).unwrap();
+    let mut again = start_core(cfg_for(&root), StartupOptions::production()).unwrap();
     assert_started_invariants(&again);
     assert_eq!(again.lifecycle.state(), LifecycleState::Ready);
     assert!(again.vault_locked());
+    assert!(again.server.storage_sealed());
+    again.server.apply_vault_unlock(&master).unwrap();
     assert_eq!(again.server.ctx.journal().unwrap().tip_sequence(), tip);
 }
 
@@ -538,7 +546,7 @@ fn acceptance_shutdown_timeout_rollback_restart() {
     assert_started_invariants(&started);
 
     grant_analyst(&mut started.server);
-    let master = started.unlock_material.clone();
+    let master = started.unlock_material.clone().expect("a fresh key store issues the Master Key once");
     let (sid, binding) = auth_pair(&mut started.server, 1);
     unlock(&mut started.server, 2, &sid, &binding, &master);
 
@@ -584,7 +592,7 @@ fn timeout_zero_with_open_txn_rolls_back() {
     )
     .unwrap();
     grant_analyst(&mut started.server);
-    let master = started.unlock_material.clone();
+    let master = started.unlock_material.clone().expect("a fresh key store issues the Master Key once");
     let (sid, binding) = auth_pair(&mut started.server, 1);
     unlock(&mut started.server, 2, &sid, &binding, &master);
     begin(&mut started.server, 3, &sid);
