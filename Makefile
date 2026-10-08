@@ -26,7 +26,8 @@ help:
 	@echo "  make invite       Export localhost invite.json"
 	@echo "  avrora menu       Interactive operator menu (serve, UI, vault, roles)"
 	@echo "  avrora init|invite|serve|status|reset --yes|menu"
-	@echo "  dmc serve --dev                    # SQL Core IPC (ADR-024 backup target)"
+	@echo "  AVRORA_DEV=1 dmc serve --dev       # SQL Core IPC, dev only (plaintext unlock file)"
+	@echo "  dmc serve --keypass-dir DIR        # SQL Core IPC, production (KeyPass, no plaintext)"
 	@echo "  dmc backup create|verify|list|restore|recover|status"
 	@echo "  make client-ui → __dmc.backup.create('daily-01')  # dev console after unlock"
 	@echo "  make test         cargo test --workspace (skips slow #[ignore] tests)"
@@ -76,6 +77,7 @@ invite:
 
 avrora: build init
 	@mkdir -p data
+	AVRORA_DEV=$(AVRORA_DEV) \
 	AVRORA_ADDR=$(AVRORA_ADDR) \
 	AVRORA_CONTROL_ADDR=$(AVRORA_CONTROL_ADDR) \
 	AVRORA_DATA=$(DATA) \
@@ -85,6 +87,7 @@ avrora: build init
 avrora-dev: build init
 	@mkdir -p data
 	@echo "Starting Avrora API on $(AVRORA_ADDR)…"
+	AVRORA_DEV=1 \
 	AVRORA_ADDR=$(AVRORA_ADDR) \
 	AVRORA_CONTROL_ADDR=$(AVRORA_CONTROL_ADDR) \
 	AVRORA_DATA=$(DATA) \
@@ -100,24 +103,14 @@ sql: build
 	@mkdir -p data "$$(dirname "$(SQL_DATA)")" "$$(dirname "$(SQL_MASTER_KEY)")"
 	@if [ -f "$(SQL_DATA)" ] && [ -f "$(SQL_MASTER_KEY)" ]; then \
 		echo "SQL unlock → $(SQL_ADDR)  data=$(SQL_DATA)"; \
-		$(PGWIRE_BIN) --data "$(SQL_DATA)" --listen "$(SQL_ADDR)" --unlock "$$(cat "$(SQL_MASTER_KEY)")"; \
+		$(PGWIRE_BIN) --data "$(SQL_DATA)" --listen "$(SQL_ADDR)" --unlock-file "$(SQL_MASTER_KEY)"; \
 	elif [ -f "$(SQL_DATA)" ]; then \
 		echo "SQL data exists but master key file missing: $(SQL_MASTER_KEY)" >&2; \
 		exit 1; \
 	else \
 		echo "SQL create → $(SQL_ADDR)  data=$(SQL_DATA)"; \
 		echo "master key will be saved to $(SQL_MASTER_KEY)"; \
-		$(PGWIRE_BIN) --data "$(SQL_DATA)" --listen "$(SQL_ADDR)" --create 2>&1 | \
-		awk -v keyfile="$(SQL_MASTER_KEY)" ' \
-			BEGIN { mode=0 } \
-			/^master key/ { mode=1; print; next } \
-			mode==1 && $$0 != "" { \
-				print > keyfile; close(keyfile); \
-				cmd = sprintf("chmod 600 \"%s\"", keyfile); system(cmd); \
-				mode=2; print; next \
-			} \
-			{ print } \
-		'; \
+		$(PGWIRE_BIN) --data "$(SQL_DATA)" --listen "$(SQL_ADDR)" --create --master-key-out "$(SQL_MASTER_KEY)"; \
 	fi
 
 # Background helper used by root `make up` (sets SQL_LOG / SQL_PID).
@@ -126,19 +119,17 @@ sql-bg: build
 	@mkdir -p data "$$(dirname "$(SQL_DATA)")" "$$(dirname "$(SQL_MASTER_KEY)")" "$$(dirname "$(SQL_LOG)")"
 	@if [ -f "$(SQL_DATA)" ] && [ -f "$(SQL_MASTER_KEY)" ]; then \
 		nohup $(PGWIRE_BIN) --data "$(SQL_DATA)" --listen "$(SQL_ADDR)" \
-			--unlock "$$(cat "$(SQL_MASTER_KEY)")" \
+			--unlock-file "$(SQL_MASTER_KEY)" \
 			> "$(SQL_LOG)" 2>&1 & echo $$! > "$(SQL_PID)"; \
 	elif [ -f "$(SQL_DATA)" ]; then \
 		echo "SQL data exists but master key file missing: $(SQL_MASTER_KEY)" >&2; \
 		exit 1; \
 	else \
 		nohup $(PGWIRE_BIN) --data "$(SQL_DATA)" --listen "$(SQL_ADDR)" --create \
+			--master-key-out "$(SQL_MASTER_KEY)" \
 			> "$(SQL_LOG)" 2>&1 & echo $$! > "$(SQL_PID)"; \
 		for i in 1 2 3 4 5 6 7 8 9 10; do \
-			KEY=$$(awk '/^master key/{getline; print; exit}' "$(SQL_LOG)" 2>/dev/null); \
-			if [ -n "$$KEY" ]; then \
-				printf '%s' "$$KEY" > "$(SQL_MASTER_KEY)"; \
-				chmod 600 "$(SQL_MASTER_KEY)"; \
+			if [ -f "$(SQL_MASTER_KEY)" ]; then \
 				echo "master key saved to $(SQL_MASTER_KEY)"; \
 				break; \
 			fi; \

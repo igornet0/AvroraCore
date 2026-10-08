@@ -32,3 +32,30 @@ pub const ENV_DEVO_DEMO: &str = "AVRORA_DEVO_DEMO";
 pub const DEV_MASTER_FILE: &str = MASTER_FILE;
 pub const DEV_UI_CREDENTIALS_FILE: &str = UI_CREDENTIALS_FILE;
 pub const DEFAULT_UI_ACCESS_KEY: &str = UI_ACCESS_KEY;
+
+/// True only when the process was explicitly started in dev mode (`AVRORA_DEV=1|true`).
+///
+/// Gates every path that would use a key stored in plaintext on disk (auto-unlock from
+/// [`MASTER_FILE`]). Production never reads a stored Master Key.
+pub fn dev_mode_enabled() -> bool {
+    dev_mode_from(std::env::var(ENV_DEV).ok().as_deref())
+}
+
+pub fn dev_mode_from(value: Option<&str>) -> bool {
+    matches!(value.map(str::trim), Some("1") | Some("true"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dev_mode_requires_explicit_opt_in() {
+        assert!(!dev_mode_from(None));
+        assert!(!dev_mode_from(Some("")));
+        assert!(!dev_mode_from(Some("0")));
+        assert!(!dev_mode_from(Some("yes")));
+        assert!(dev_mode_from(Some("1")));
+        assert!(dev_mode_from(Some("true")));
+    }
+}

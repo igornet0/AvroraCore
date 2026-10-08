@@ -5,15 +5,18 @@ edition.workspace = true
 
 [dependencies]
 dmc-vault = { path = "../dmc-vault" }
+ed25519-dalek = "2"
 hex = "0.4.3"
 rand = "0.10.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11.0"
+subtle = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt", "sync"] }
 totp-rs = { version = "6.0.0", features = ["otpauth", "gen_secret", "qr"] }
 uuid = { version = "1", features = ["v4"] }
+zeroize = "1"
 
 [dev-dependencies]
 tempfile = "3"

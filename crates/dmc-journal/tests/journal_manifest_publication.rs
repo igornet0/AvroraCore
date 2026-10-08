@@ -140,8 +140,12 @@ fn replay_identical_before_and_after_publication() {
     let mid = replay_entries(&journal, &mut tree);
     assert_eq!(before.len(), mid.len());
 
+    let generation_before = journal
+        .read_stored_journal_manifest()
+        .unwrap()
+        .map_or(0, |m| m.generation());
     let published = journal.publish_compaction(&artifact).unwrap();
-    assert_eq!(published.generation, 1);
+    assert_eq!(published.generation, generation_before + 1);
     let after = replay_entries(&journal, &mut tree);
     assert_eq!(before.len(), after.len());
     for (a, b) in before.iter().zip(after.iter()) {

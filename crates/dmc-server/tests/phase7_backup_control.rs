@@ -59,11 +59,47 @@ fn control(
     .unwrap()
 }
 
+/// D4-F: the bootstrap opens SQL storage only on `VaultUnlock` (as production does), so
+/// backups — sealed with the storage keys — need an unlocked vault.
+fn unlocked(root: &std::path::Path) -> (CoreServerState, String) {
+    let (mut state, master) = bootstrap_core_state_locked(root, true);
+    let (sid, binding) = auth_pair(&mut state);
+    let blob = create_unlock_blob(&sid, &binding, &MockKeyPassProvider::with_material(master))
+        .unwrap();
+    expect_ok_control(control(
+        &mut state,
+        1,
+        ControlRequest::VaultUnlock {
+            session_id: sid.clone(),
+            blob,
+        },
+    ))
+    .unwrap();
+    (state, sid)
+}
+
 #[test]
-fn create_then_verify_and_list() {
+fn backup_needs_an_unlocked_vault() {
     let dir = tempdir().unwrap();
     let (mut state, _master) = bootstrap_core_state_locked(dir.path(), true);
     let (sid, _) = auth_pair(&mut state);
+    let resp = control(
+        &mut state,
+        2,
+        ControlRequest::BackupCreate {
+            session_id: sid,
+            backup_id: "locked".into(),
+            include_rowstore: false,
+        },
+    );
+    assert_eq!(resp.error_code, Some(ProtocolErrorCode::VaultLocked));
+    assert!(!dir.path().join("backups/backup-locked").exists());
+}
+
+#[test]
+fn create_then_verify_and_list() {
+    let dir = tempdir().unwrap();
+    let (mut state, sid) = unlocked(dir.path());
 
     let created = expect_ok_control(control(
         &mut state,
@@ -78,6 +114,7 @@ fn create_then_verify_and_list() {
     let ControlResponse::BackupCreate {
         backup_id,
         checkpoint_sequence,
+        ..
     } = created
     else {
         panic!("create");
@@ -202,8 +239,7 @@ fn backup_remains_valid_after_live_commits() {
 #[test]
 fn restore_invalid_backup_rejected() {
     let dir = tempdir().unwrap();
-    let (mut state, _master) = bootstrap_core_state_locked(dir.path(), true);
-    let (sid, _) = auth_pair(&mut state);
+    let (mut state, sid) = unlocked(dir.path());
 
     expect_ok_control(control(
         &mut state,
@@ -236,8 +272,7 @@ fn restore_invalid_backup_rejected() {
 #[test]
 fn restore_non_empty_target_rejected() {
     let dir = tempdir().unwrap();
-    let (mut state, _master) = bootstrap_core_state_locked(dir.path(), true);
-    let (sid, _) = auth_pair(&mut state);
+    let (mut state, sid) = unlocked(dir.path());
 
     expect_ok_control(control(
         &mut state,
@@ -280,8 +315,7 @@ fn restore_non_empty_target_rejected() {
 #[test]
 fn restore_then_recover_ready_and_idempotent() {
     let dir = tempdir().unwrap();
-    let (mut state, _master) = bootstrap_core_state_locked(dir.path(), true);
-    let (sid, _) = auth_pair(&mut state);
+    let (mut state, sid) = unlocked(dir.path());
 
     expect_ok_control(control(
         &mut state,
@@ -392,8 +426,7 @@ fn backup_ops_require_session() {
 #[test]
 fn backup_not_found() {
     let dir = tempdir().unwrap();
-    let (mut state, _master) = bootstrap_core_state_locked(dir.path(), true);
-    let (sid, _) = auth_pair(&mut state);
+    let (mut state, sid) = unlocked(dir.path());
     let resp = control(
         &mut state,
         2,

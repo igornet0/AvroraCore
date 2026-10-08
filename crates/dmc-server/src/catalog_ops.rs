@@ -24,6 +24,9 @@ pub fn handle_catalog(
             "sql catalog unsupported",
         );
     }
+    if state.storage_sealed() {
+        return ResponseEnvelope::err(request_id, ProtocolErrorCode::VaultLocked, "vault is locked");
+    }
     let catalog = match state.ctx.session_catalog() {
         Ok(c) => c,
         Err(e) => {

@@ -451,20 +451,29 @@ impl KeyTree {
         !self.keks.is_empty() || !self.deks.is_empty()
     }
 
-    pub fn install_kek(&mut self, path: &KeyPath, kek: KeyMaterial) {
-        self.keks.insert(path.as_str().to_string(), kek);
-    }
-
-    pub fn export_kek(&self, path: &KeyPath) -> Result<&KeyMaterial> {
-        self.keks
-            .get(path.as_str())
-            .ok_or_else(|| Error::UnknownNode(path.to_string()))
-    }
-
     pub fn peek_dek(&self, path: &KeyPath) -> Result<&KeyMaterial> {
         self.deks
             .get(path.as_str())
             .ok_or_else(|| Error::UnknownNode(path.to_string()))
+    }
+
+    /// Locked tree rebuilt from persisted public state (no KEK/DEK in memory). Unlock it
+    /// with [`Self::unlock`] and the master secret.
+    pub fn locked_from_persisted(salt: [u8; 32], unlock_proof: AeadBlob, metas: Vec<KeyNodeMeta>) -> Result<Self> {
+        let mut tree = Self {
+            salt,
+            unlock_proof,
+            nodes: HashMap::new(),
+            keks: HashMap::new(),
+            deks: HashMap::new(),
+        };
+        for meta in metas {
+            tree.install_meta(meta)?;
+        }
+        if !tree.nodes.contains_key("") {
+            return Err(Error::Persist("missing root node".into()));
+        }
+        Ok(tree)
     }
 
     /// Install persisted node metadata (replay / journal node bundle).

@@ -72,6 +72,14 @@ pub enum Error {
     #[error(transparent)]
     Vault(dmc_vault::Error),
 
+    /// Key access refused by the cryptographic authorization layer.
+    #[error("key access denied: {0}")]
+    KeyAccessDenied(String),
+
+    /// Cryptographic ownership failure (fail-closed: no fallback, no plaintext).
+    #[error(transparent)]
+    Ownership(#[from] dmc_vault::ownership::Error),
+
     #[error(transparent)]
     Auth(#[from] AuthError),
 }

@@ -1,0 +1,15 @@
+suite,system,scenario,params,ops,duration_s,ops_per_s,mb_per_s,p50_us,p95_us,p99_us,max_us,errors,cpu_pct,peak_rss_mb,disk_write_mb,disk_read_mb
+stress,avrora_kv_inproc,concurrency_ramp_write,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':1}",4290,15.0,286.0,0.28,3129.71,4141.38,5017.54,10389.08,0,9.58,30.44,98.38,0.04
+stress,avrora_kv_inproc,concurrency_ramp_write,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':2}",4448,15.0,296.53,0.29,6739.63,8084.88,9937.46,19439.54,0,10.29,40.52,102.8,0.3
+stress,avrora_kv_inproc,concurrency_ramp_write,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':4}",4305,15.0,287.0,0.28,13544.58,17834.67,20959.33,33850.46,0,10.77,47.92,98.92,0.26
+stress,avrora_kv_inproc,concurrency_ramp_write,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':8}",4323,15.0,288.2,0.28,27893.5,32179.46,36034.29,56030.42,0,9.83,56.28,98.89,0.34
+stress,avrora_kv_inproc,concurrency_ramp_write,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':16}",4340,15.0,289.33,0.28,55923.92,62934.46,66999.63,71055.29,0,10.11,63.48,100.09,0.25
+stress,avrora_kv_inproc,concurrency_ramp_write,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':32}",4282,15.0,285.47,0.28,111366.96,127000.67,135886.54,144914.33,0,11.23,66.86,99.48,0.22
+stress,avrora_kv_inproc,concurrency_ramp_write,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':64}",4001,15.0,266.73,0.26,240352.46,279252.83,300181.96,323570.0,0,8.51,59.72,94.29,0.11
+stress,avrora_kv_inproc,concurrency_ramp_read,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':1}",524288,0.82,641087.26,626.06,1.46,1.79,2.08,166.67,0,100.41,53.59,0.0,0.0
+stress,avrora_kv_inproc,concurrency_ramp_read,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':2}",524289,1.03,510809.42,498.84,3.88,4.58,5.08,262.63,0,120.71,58.48,0.0,0.0
+stress,avrora_kv_inproc,concurrency_ramp_read,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':4}",524291,0.95,550350.34,537.45,7.13,7.83,9.13,817.33,0,117.62,66.52,0.0,0.0
+stress,avrora_kv_inproc,concurrency_ramp_read,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':8}",524295,0.98,534607.67,522.08,14.63,16.21,20.38,416.29,0,116.37,68.88,0.0,0.0
+stress,avrora_kv_inproc,concurrency_ramp_read,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':16}",524303,0.97,538785.95,526.16,29.17,32.17,38.54,770.71,0,116.7,69.47,0.0,0.0
+stress,avrora_kv_inproc,concurrency_ramp_read,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':32}",524319,0.99,527258.24,514.9,58.29,70.67,101.33,908.0,0,117.51,70.09,0.0,0.0
+stress,avrora_kv_inproc,concurrency_ramp_read,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':64}",524351,0.99,531387.21,518.93,117.46,134.83,137.71,1034.38,0,118.44,65.59,0.0,0.0

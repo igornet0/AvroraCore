@@ -1,0 +1,885 @@
+== build
+warning: Cargo.toml: unused manifest key: workspace.package.name
+warning: workspace (manifest) generated 1 warning
+    Blocking waiting for file lock on build directory
+warning: unused import: `StorageManifest`
+ --> crates/dmc-storage/src/apply.rs:5:63
+  |
+5 | use crate::manifest::{schema_from_catalog_columns, table_dir, StorageManifest};
+  |                                                               ^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `publish_manifest` and `read_manifest`
+  --> crates/dmc-storage/src/index/index_store.rs:11:23
+   |
+11 | use crate::manifest::{publish_manifest, read_manifest, sync_dir, write_sync_rename, MANIFEST_TMP};
+   |                       ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^
+
+warning: unused import: `INDEX_MANIFEST_FORMAT_VERSION`
+ --> crates/dmc-storage/src/index/mod.rs:8:32
+  |
+8 |     IndexManifest, IndexStore, INDEX_MANIFEST_FORMAT_VERSION,
+  |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `DEFAULT_MAX_SEGMENT_BYTES`
+  --> crates/dmc-storage/src/row_store.rs:11:5
+   |
+11 |     DEFAULT_MAX_SEGMENT_BYTES,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+  --> crates/dmc-storage/src/segment.rs:46:13
+   |
+46 |         let mut file = OpenOptions::new()
+   |             ----^^^^
+   |             |
+   |             help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `read_table_manifest_generation` is never used
+   --> crates/dmc-storage/src/apply.rs:139:8
+    |
+139 | pub fn read_table_manifest_generation(root: &std::path::Path, table_id: TableId) -> Result<u64> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `encode_record_legacy` is never used
+  --> crates/dmc-storage/src/codec.rs:79:8
+   |
+79 | pub fn encode_record_legacy(row_id: u64, flags: u8, values: &[StoredValue]) -> Result<Vec<u8>> {
+   |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `from_total_order_f64` is never used
+   --> crates/dmc-storage/src/index/key.rs:198:8
+    |
+198 | pub fn from_total_order_f64(bits: u64) -> f64 {
+    |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `segments_dir` is never used
+  --> crates/dmc-storage/src/manifest.rs:61:8
+   |
+61 | pub fn segments_dir(table_root: &Path) -> PathBuf {
+   |        ^^^^^^^^^^^^
+
+warning: constant `MIN_RECORD_LEN` is never used
+  --> crates/dmc-storage/src/page.rs:13:11
+   |
+13 | pub const MIN_RECORD_LEN: usize = RECORD_HEADER_LEN + RECORD_CRC_LEN;
+   |           ^^^^^^^^^^^^^^
+
+warning: constant `LEGACY_RECORD_HEADER_LEN` is never used
+  --> crates/dmc-storage/src/page.rs:16:11
+   |
+16 | pub const LEGACY_RECORD_HEADER_LEN: usize = 4 + 4 + 8 + 1 + 2;
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `dmc-storage` (lib) generated 11 warnings (run `cargo fix --lib -p dmc-storage` to apply 5 suggestions)
+warning: unused import: `JoinBuildSide`
+  --> crates/dmc-sql-plan/src/cbo/apply.rs:11:38
+   |
+11 | use super::decisions::{CboDecisions, JoinBuildSide};
+   |                                      ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `ColumnId` and `TableId`
+ --> crates/dmc-sql-plan/src/cbo/cardinality.rs:3:17
+  |
+3 | use dmc_model::{ColumnId, TableId, TableStatistics};
+  |                 ^^^^^^^^  ^^^^^^^
+
+warning: unused import: `BoundValue`
+ --> crates/dmc-sql-plan/src/cbo/cardinality.rs:4:47
+  |
+4 | use dmc_sql_bind::{BoundColumnRef, BoundExpr, BoundValue};
+  |                                               ^^^^^^^^^^
+
+warning: function `find_scan` is never used
+   --> crates/dmc-sql-plan/src/optimizer/projection.rs:237:4
+    |
+237 | fn find_scan<'a>(plan: &'a LogicalPlan, table_id: TableId) -> Option<&'a LogicalScan> {
+    |    ^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `dmc-sql-plan` (lib) generated 4 warnings (run `cargo fix --lib -p dmc-sql-plan` to apply 3 suggestions)
+warning: unused import: `JoinBuildSide`
+ --> crates/dmc-sql-phys/src/planner.rs:2:70
+  |
+2 |     is_scan_chain, peel_scan_chain, CboDecisionCursor, CboDecisions, JoinBuildSide, LogicalAggregate,
+  |                                                                      ^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `map_scan` is never used
+   --> crates/dmc-sql-phys/src/planner.rs:166:4
+    |
+166 | fn map_scan(scan: &LogicalScan) -> PhysicalScan {
+    |    ^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `dmc-sql-phys` (lib) generated 2 warnings (run `cargo fix --lib -p dmc-sql-phys` to apply 1 suggestion)
+warning: unused import: `HashSet`
+ --> crates/dmc-sql-exec/src/constraints.rs:1:33
+  |
+1 | use std::collections::{HashMap, HashSet};
+  |                                 ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `ensure_active`
+  --> crates/dmc-sql-exec/src/context.rs:13:5
+   |
+13 |     ensure_active, ensure_no_active, next_transaction_id, ActiveTransaction, ScanContext,
+   |     ^^^^^^^^^^^^^
+
+warning: unused import: `CatalogAuthorizer`
+ --> crates/dmc-sql-exec/src/executor.rs:7:54
+  |
+7 | use dmc_security::auth::{AuthPrincipal, AuthService, CatalogAuthorizer, SessionManager};
+  |                                                      ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `plan_physical`
+ --> crates/dmc-sql-exec/src/executor.rs:9:20
+  |
+9 | use dmc_sql_phys::{plan_physical, plan_physical_with_cbo};
+  |                    ^^^^^^^^^^^^^
+
+warning: unused import: `ValueVector`
+  --> crates/dmc-sql-exec/src/project.rs:10:39
+   |
+10 | use crate::vector::{values_to_vector, ValueVector};
+   |                                       ^^^^^^^^^^^
+
+warning: unused variable: `args`
+  --> crates/dmc-sql-exec/src/expression.rs:32:37
+   |
+32 |         BoundExpr::Function { name, args, .. } => {
+   |                                     ^^^^ help: try ignoring the field: `args: _`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `data_type`
+   --> crates/dmc-sql-exec/src/expression.rs:125:5
+    |
+125 |     data_type: &SqlDataType,
+    |     ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_data_type`
+
+warning: unused variable: `data_type`
+   --> crates/dmc-sql-exec/src/expression.rs:161:5
+    |
+161 |     data_type: &SqlDataType,
+    |     ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_data_type`
+
+warning: unused variable: `l`
+   --> crates/dmc-sql-exec/src/expression.rs:421:21
+    |
+421 |         (Value::Int(l), Value::BigInt(r)) | (Value::BigInt(l), Value::Int(r)) => {
+    |                     ^                                      ^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+421 |         (Value::Int(_l), Value::BigInt(r)) | (Value::BigInt(_l), Value::Int(r)) => {
+    |                     +                                       +
+
+warning: unused variable: `r`
+   --> crates/dmc-sql-exec/src/expression.rs:421:39
+    |
+421 |         (Value::Int(l), Value::BigInt(r)) | (Value::BigInt(l), Value::Int(r)) => {
+    |                                       ^                                   ^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+421 |         (Value::Int(l), Value::BigInt(_r)) | (Value::BigInt(l), Value::Int(_r)) => {
+    |                                       +                                    +
+
+warning: unused variable: `l`
+   --> crates/dmc-sql-exec/src/expression.rs:432:21
+    |
+432 |         (Value::Int(l), Value::Double(r)) | (Value::BigInt(l), Value::Double(r)) => {
+    |                     ^                                      ^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+432 |         (Value::Int(_l), Value::Double(r)) | (Value::BigInt(_l), Value::Double(r)) => {
+    |                     +                                       +
+
+warning: unused variable: `r`
+   --> crates/dmc-sql-exec/src/expression.rs:435:39
+    |
+435 |         (Value::Double(l), Value::Int(r)) | (Value::Double(l), Value::BigInt(r)) => {
+    |                                       ^                                      ^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+435 |         (Value::Double(l), Value::Int(_r)) | (Value::Double(l), Value::BigInt(_r)) => {
+    |                                       +                                       +
+
+warning: variable does not need to be mutable
+  --> crates/dmc-sql-exec/src/limit.rs:38:22
+   |
+38 |             let Some(mut chunk) = self.child.next()? else {
+   |                      ----^^^^^
+   |                      |
+   |                      help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `same_insert_rows` is never used
+   --> crates/dmc-sql-exec/src/constraints.rs:254:4
+    |
+254 | fn same_insert_rows(a: &DataEvent, b: &DataEvent) -> bool {
+    |    ^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `map_storage_error_model` is never used
+   --> crates/dmc-sql-exec/src/constraints.rs:443:4
+    |
+443 | fn map_storage_error_model(err: dmc_storage::Error) -> Error {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `values_to_row` is never used
+   --> crates/dmc-sql-exec/src/constraints.rs:448:8
+    |
+448 | pub fn values_to_row(values: &[Value]) -> Vec<RowValue> {
+    |        ^^^^^^^^^^^^^
+
+warning: function `literal_value` is never used
+   --> crates/dmc-sql-exec/src/expression.rs:476:8
+    |
+476 | pub fn literal_value(value: SqlValue, data_type: SqlDataType) -> Value {
+    |        ^^^^^^^^^^^^^
+
+warning: function `chunk_schema_from_slots` is never used
+   --> crates/dmc-sql-exec/src/expression.rs:480:8
+    |
+480 | pub fn chunk_schema_from_slots(slots: Vec<RuntimeColumn>) -> ChunkSchema {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated function `new` is never used
+  --> crates/dmc-sql-exec/src/index_scan.rs:30:12
+   |
+29 | impl IndexScanExecutor {
+   | ---------------------- associated function in this implementation
+30 |     pub fn new(scan: &PhysicalIndexScan, ctx: &crate::context::ExecutionContext) -> Result<Self> {
+   |            ^^^
+
+warning: field `output_name` is never read
+  --> crates/dmc-sql-exec/src/project.rs:22:9
+   |
+20 |     Expr {
+   |     ---- field in this variant
+21 |         expr: BoundExpr,
+22 |         output_name: Option<String>,
+   |         ^^^^^^^^^^^
+   |
+   = note: `ProjectionItem` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: function `write_conflict` is never used
+   --> crates/dmc-sql-exec/src/transaction.rs:140:8
+    |
+140 | pub fn write_conflict(reason: impl Into<String>) -> ExecutionError {
+    |        ^^^^^^^^^^^^^^
+
+warning: function `ensure_active` is never used
+   --> crates/dmc-sql-exec/src/transaction.rs:144:8
+    |
+144 | pub fn ensure_active(txn: Option<&ActiveTransaction>) -> Result<&ActiveTransaction> {
+    |        ^^^^^^^^^^^^^
+
+warning: function `boolean_vector` is never used
+   --> crates/dmc-sql-exec/src/vector.rs:263:8
+    |
+263 | pub fn boolean_vector(values: Vec<bool>, validity: ValidityBitmap) -> ValueVector {
+    |        ^^^^^^^^^^^^^^
+
+warning: value assigned to `expect` is never read
+   --> crates/dmc-backup/src/verify.rs:358:17
+    |
+358 |                 expect = ev.sequence;
+    |                 ^^^^^^^^^^^^^^^^^^^^ this value is reassigned later and never used
+...
+368 |             expect = ev.sequence.saturating_add(1);
+    |             -------------------------------------- `expect` is overwritten here before the previous value is read
+    |
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: `dmc-sql-exec` (lib) generated 23 warnings (run `cargo fix --lib -p dmc-sql-exec` to apply 13 suggestions)
+warning: `dmc-backup` (lib) generated 1 warning
+warning: unused imports: `expect_ok_control` and `expect_ok_data`
+  --> crates/dmc-ipc/src/client.rs:70:22
+   |
+70 | pub use dmc_server::{expect_ok_control, expect_ok_data};
+   |                      ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `dmc-ipc` (lib) generated 1 warning (run `cargo fix --lib -p dmc-ipc` to apply 1 suggestion)
+warning: field `runtime_hub` is never read
+  --> crates/dmc-cli/src/serve.rs:24:9
+   |
+19 | pub struct ServeOutcome {
+   |            ------------ field in this struct
+...
+24 |     pub runtime_hub: RuntimeHub,
+   |         ^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `logout` and `health` are never used
+   --> crates/dmc-cli/src/session.rs:103:12
+    |
+ 20 | impl Session {
+    | ------------ methods in this implementation
+...
+103 |     pub fn logout(&mut self) -> Result<(), String> {
+    |            ^^^^^^
+...
+110 |     pub fn health(&mut self) -> Result<(), String> {
+    |            ^^^^^^
+
+warning: use of deprecated struct `libc::mach_timebase_info`: Use the `mach2` crate instead
+  --> crates/dmc-bench/src/bin/bench_v1/common.rs:82:24
+   |
+82 |     let mut tb = libc::mach_timebase_info { numer: 0, denom: 0 };
+   |                        ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated function `libc::mach_timebase_info`: Use the `mach2` crate instead
+  --> crates/dmc-bench/src/bin/bench_v1/common.rs:84:15
+   |
+84 |         libc::mach_timebase_info(&mut tb);
+   |               ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `libc::mach_timebase_info::numer`: Use the `mach2` crate instead
+  --> crates/dmc-bench/src/bin/bench_v1/common.rs:82:45
+   |
+82 |     let mut tb = libc::mach_timebase_info { numer: 0, denom: 0 };
+   |                                             ^^^^^^^^
+
+warning: use of deprecated field `libc::mach_timebase_info::denom`: Use the `mach2` crate instead
+  --> crates/dmc-bench/src/bin/bench_v1/common.rs:82:55
+   |
+82 |     let mut tb = libc::mach_timebase_info { numer: 0, denom: 0 };
+   |                                                       ^^^^^^^^
+
+warning: use of deprecated field `libc::mach_timebase_info::numer`: Use the `mach2` crate instead
+  --> crates/dmc-bench/src/bin/bench_v1/common.rs:86:6
+   |
+86 |     (tb.numer, tb.denom)
+   |      ^^^^^^^^
+
+warning: use of deprecated field `libc::mach_timebase_info::denom`: Use the `mach2` crate instead
+  --> crates/dmc-bench/src/bin/bench_v1/common.rs:86:16
+   |
+86 |     (tb.numer, tb.denom)
+   |                ^^^^^^^^
+
+warning: field `stream` is never read
+  --> crates/dmc-bench/src/bin/bench_v1/channel.rs:28:9
+   |
+25 | pub struct ChanEnv {
+   |            ------- field in this struct
+...
+28 |     pub stream: StreamId,
+   |         ^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `rt_of` is never used
+   --> crates/dmc-bench/src/bin/bench_v1/channel.rs:523:8
+    |
+523 | pub fn rt_of(ce: &ChanEnv) -> &Runtime {
+    |        ^^^^^
+
+warning: method `len` is never used
+  --> crates/dmc-bench/src/bin/bench_v1/common.rs:40:12
+   |
+25 | impl Lat {
+   | -------- method in this implementation
+...
+40 |     pub fn len(&self) -> usize {
+   |            ^^^
+
+warning: field `dir` is never read
+   --> crates/dmc-bench/src/bin/bench_v1/common.rs:282:9
+    |
+281 | pub struct Sink {
+    |            ---- field in this struct
+282 |     pub dir: PathBuf,
+    |         ^^^
+    |
+    = note: `Sink` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: field `dir` is never read
+  --> crates/dmc-bench/src/bin/bench_v1/conn.rs:62:9
+   |
+60 | pub struct ControlProc {
+   |            ----------- field in this struct
+61 |     pub child: Child,
+62 |     pub dir: tempfile::TempDir,
+   |         ^^^
+
+warning: function `shared` is never used
+   --> crates/dmc-bench/src/bin/bench_v1/storage.rs:195:8
+    |
+195 | pub fn shared<T>(v: T) -> Arc<T> {
+    |        ^^^^^^
+
+warning: `dmc-cli` (bin "dmc") generated 2 warnings
+warning: `dmc-bench` (bin "avrora-bench-v1") generated 12 warnings
+    Finished `release` profile [optimized] target(s) in 1.83s
+== env: env
+{
+  "build_profile": "release",
+  "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
+  "cpu": "Apple M4",
+  "cpu_cores_eff": "6",
+  "cpu_cores_logical": "10",
+  "cpu_cores_perf": "4",
+  "disk": [
+    "File System Personality:   APFS",
+    "Container Free Space:      47.7 GB (47691296768 Bytes) (exactly 93147064 512-Byte-Units)",
+    "Solid State:               Yes"
+  ],
+  "ephemeral_ports": "49152-65535",
+  "extra": {
+    "nofile_limit": 61440
+  },
+  "git_commit": "0ec23fb0bcd8f86a3784dc2de22496057a4f0ee9",
+  "git_dirty": true,
+  "kern_maxfilesperproc": "61440",
+  "kernel": "Darwin smarthome.lan 25.2.0 Darwin Kernel Version 25.2.0: Tue Nov 18 21:08:48 PST 2025; root:xnu-12377.61.12~1/RELEASE_ARM64_T8132 arm64",
+  "maxprocperuid": "2666",
+  "os": "macOS 26.2 (25C56)",
+  "postgres": "postgres (PostgreSQL) 14.17 (Homebrew)",
+  "ram_bytes": "17179869184",
+  "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+  "somaxconn": "128",
+  "timestamp_utc": "2026-10-03T06:13:10.718250+00:00"
+}
+== env exit=0 elapsed=1s
+== correctness: --warmup 5 --measure 30 correctness --crash-cycles 5
+["correctness"] "avrora_runtime_inproc" "idempotent_producer"  ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["correctness"] "avrora_runtime_inproc" "retry_ack_on_3rd_attempt"  ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["correctness"] "avrora_runtime_inproc" "dlq_max_attempts_3"  ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["correctness"] "avrora_runtime_inproc" "graceful_restart"  ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["correctness"] "avrora_runtime_child_process" "sigkill_crash_recovery"  ops/s=null MB/s=null p50=nullus p99=nullus err=null
+== correctness exit=0 elapsed=101s
+== security: --warmup 5 --measure 15 security
+["security"] "primitive" "aes256gcm_encrypt" {"size":"100B"} ops/s=245027.57 MB/s=23.37 p50=1.96us p99=2.58us err=0
+["security"] "primitive" "aes256gcm_decrypt" {"size":"100B"} ops/s=245027.57 MB/s=23.37 p50=1.96us p99=2.54us err=0
+["security"] "primitive" "aes256gcm_encrypt" {"size":"1KB"} ops/s=83599.15 MB/s=81.64 p50=5.58us p99=13.13us err=0
+["security"] "primitive" "aes256gcm_decrypt" {"size":"1KB"} ops/s=83599.15 MB/s=81.64 p50=5.58us p99=13.08us err=0
+["security"] "primitive" "aes256gcm_encrypt" {"size":"10KB"} ops/s=10001.99 MB/s=97.68 p50=47.63us p99=105.54us err=0
+["security"] "primitive" "aes256gcm_decrypt" {"size":"10KB"} ops/s=10001.99 MB/s=97.68 p50=47.63us p99=94.88us err=0
+["security"] "primitive" "aes256gcm_encrypt" {"size":"100KB"} ops/s=1062.37 MB/s=103.75 p50=469.83us p99=494.83us err=0
+["security"] "primitive" "aes256gcm_decrypt" {"size":"100KB"} ops/s=1062.37 MB/s=103.75 p50=469.08us p99=491.96us err=0
+["security"] "primitive" "aes256gcm_encrypt" {"size":"1MB"} ops/s=104.09 MB/s=104.09 p50=4811.58us p99=4903.13us err=0
+["security"] "primitive" "aes256gcm_decrypt" {"size":"1MB"} ops/s=104.09 MB/s=104.09 p50=4818.13us p99=4903.92us err=0
+["security"] "primitive" "append_no_sync" {"size":"100B"} ops/s=1012880.39 MB/s=96.6 p50=0.88us p99=2.88us err=0
+["security"] "primitive" "append_fsync_libc" {"size":"100B"} ops/s=55334.81 MB/s=5.28 p50=17.25us p99=31.25us err=0
+["security"] "primitive" "append_sync_all_F_FULLFSYNC" {"size":"100B"} ops/s=260.58 MB/s=0.02 p50=3981.71us p99=5981.29us err=0
+["security"] "primitive" "append_aes_sync_all" {"size":"100B"} ops/s=264.47 MB/s=0.03 p50=3975.38us p99=5019.13us err=0
+["security"] "primitive" "append_no_sync" {"size":"1KB"} ops/s=236047.61 MB/s=230.52 p50=2.63us p99=16.38us err=0
+["security"] "primitive" "append_fsync_libc" {"size":"1KB"} ops/s=31169.78 MB/s=30.44 p50=28.79us p99=56.54us err=0
+["security"] "primitive" "append_sync_all_F_FULLFSYNC" {"size":"1KB"} ops/s=250.03 MB/s=0.24 p50=3969.67us p99=9910.33us err=0
+["security"] "primitive" "append_aes_sync_all" {"size":"1KB"} ops/s=257.19 MB/s=0.25 p50=3979.79us p99=5214.96us err=0
+["security"] "primitive" "append_no_sync" {"size":"10KB"} ops/s=67538.63 MB/s=659.56 p50=4.83us p99=15.67us err=0
+["security"] "primitive" "append_fsync_libc" {"size":"10KB"} ops/s=27416.66 MB/s=267.74 p50=31.42us p99=53.75us err=0
+["security"] "primitive" "append_sync_all_F_FULLFSYNC" {"size":"10KB"} ops/s=241.88 MB/s=2.36 p50=4003.5us p99=6027.92us err=0
+["security"] "primitive" "append_aes_sync_all" {"size":"10KB"} ops/s=231.2 MB/s=2.26 p50=4115.75us p99=5135.54us err=0
+["security"] "primitive" "append_no_sync" {"size":"100KB"} ops/s=11114.1 MB/s=1085.36 p50=12.5us p99=4249.67us err=0
+["security"] "primitive" "append_fsync_libc" {"size":"100KB"} ops/s=9975.2 MB/s=974.14 p50=56.5us p99=1201.46us err=0
+["security"] "primitive" "append_sync_all_F_FULLFSYNC" {"size":"100KB"} ops/s=235.83 MB/s=23.03 p50=4004.21us p99=7023.21us err=0
+["security"] "primitive" "append_aes_sync_all" {"size":"100KB"} ops/s=175.18 MB/s=17.11 p50=5881.46us p99=8884.5us err=0
+["security"] "primitive" "append_no_sync" {"size":"1MB"} ops/s=1251.7 MB/s=1251.7 p50=93.54us p99=8038.17us err=0
+["security"] "primitive" "append_fsync_libc" {"size":"1MB"} ops/s=968.07 MB/s=968.07 p50=1050.75us p99=2838.75us err=0
+["security"] "primitive" "append_sync_all_F_FULLFSYNC" {"size":"1MB"} ops/s=208.28 MB/s=208.28 p50=4927.42us p99=8010.58us err=0
+["security"] "primitive" "append_aes_sync_all" {"size":"1MB"} ops/s=110.73 MB/s=110.73 p50=8974.25us p99=14339.25us err=0
+["security"] "echo_plain_tcp" "echo_roundtrip" {"size":"100B","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=55009.93 MB/s=10.49 p50=17.96us p99=31.79us err=0
+["security"] "echo_tls13" "echo_roundtrip" {"size":"100B","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=52894.93 MB/s=10.09 p50=18.75us p99=32.08us err=0
+["security"] "echo_plain_tcp" "echo_roundtrip" {"size":"1KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=53215.2 MB/s=103.94 p50=18.54us p99=32.04us err=0
+["security"] "echo_tls13" "echo_roundtrip" {"size":"1KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=47609.27 MB/s=92.99 p50=21.0us p99=34.0us err=0
+["security"] "echo_plain_tcp" "echo_roundtrip" {"size":"10KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=49566.2 MB/s=968.09 p50=19.54us p99=33.42us err=0
+["security"] "echo_tls13" "echo_roundtrip" {"size":"10KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=30537.6 MB/s=596.44 p50=32.25us p99=46.13us err=0
+["security"] "echo_plain_tcp" "echo_roundtrip" {"size":"100KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=29382.0 MB/s=5738.67 p50=33.04us p99=47.46us err=0
+["security"] "echo_tls13" "echo_roundtrip" {"size":"100KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=8269.6 MB/s=1615.16 p50=119.92us p99=136.79us err=0
+["security"] "primitive" "connect_tcp_only"  ops/s=null MB/s=null p50=33.71us p99=109.79us err=null
+["security"] "primitive" "tls13_handshake_after_tcp"  ops/s=null MB/s=null p50=182.54us p99=276.58us err=null
+["security"] "avrora_inproc" "kv_put" {"keys":200,"size":"100B","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=96.6 MB/s=0.01 p50=10062.46us p99=13021.04us err=0
+["security"] "avrora_inproc" "kv_get" {"keys":200,"size":"100B","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=668711.74 MB/s=63.77 p50=1.42us p99=1.92us err=0
+["security"] "avrora_remote_tls13_mtls" "kv_put" {"keys":200,"size":"100B","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=83.27 MB/s=0.01 p50=11990.63us p99=15168.29us err=0
+["security"] "avrora_remote_tls13_mtls" "kv_get" {"keys":200,"size":"100B","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=43478.47 MB/s=4.15 p50=22.5us p99=37.0us err=0
+["security"] "avrora_inproc" "kv_put" {"keys":200,"size":"1KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=94.93 MB/s=0.09 p50=10132.92us p99=14120.75us err=0
+["security"] "avrora_inproc" "kv_get" {"keys":200,"size":"1KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=665215.37 MB/s=649.62 p50=1.42us p99=1.92us err=0
+["security"] "avrora_remote_tls13_mtls" "kv_put" {"keys":200,"size":"1KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=82.6 MB/s=0.08 p50=12001.38us p99=15778.0us err=0
+["security"] "avrora_remote_tls13_mtls" "kv_get" {"keys":200,"size":"1KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=25107.66 MB/s=24.52 p50=36.71us p99=94.54us err=0
+["security"] "avrora_inproc" "kv_put" {"keys":200,"size":"10KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=104.47 MB/s=1.02 p50=9156.25us p99=13972.13us err=0
+["security"] "avrora_inproc" "kv_get" {"keys":200,"size":"10KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=499338.09 MB/s=4876.35 p50=1.75us p99=4.25us err=0
+["security"] "avrora_remote_tls13_mtls" "kv_put" {"keys":200,"size":"10KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=83.4 MB/s=0.81 p50=11141.75us p99=26224.08us err=0
+["security"] "avrora_remote_tls13_mtls" "kv_get" {"keys":200,"size":"10KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=5507.75 MB/s=53.79 p50=177.96us p99=246.63us err=0
+["security"] "avrora_inproc" "kv_put" {"keys":200,"size":"100KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=79.33 MB/s=7.75 p50=12271.96us p99=17154.33us err=0
+["security"] "avrora_inproc" "kv_get" {"keys":200,"size":"100KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=170169.04 MB/s=16618.07 p50=5.58us p99=9.88us err=0
+["security"] "avrora_remote_tls13_mtls" "kv_put" {"keys":200,"size":"100KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=72.07 MB/s=7.04 p50=13954.38us p99=17674.58us err=0
+["security"] "avrora_remote_tls13_mtls" "kv_get" {"keys":200,"size":"100KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=623.65 MB/s=60.9 p50=1595.83us p99=1786.38us err=0
+["security"] "avrora_inproc" "kv_put" {"keys":200,"size":"300KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=66.45 MB/s=19.47 p50=14976.67us p99=21397.79us err=0
+["security"] "avrora_inproc" "kv_get" {"keys":200,"size":"300KB","timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=88037.53 MB/s=25792.25 p50=11.08us p99=14.38us err=0
+["security"] "avrora_remote_tls13_mtls" "kv_put" {"size":"300KB"} ops/s=null MB/s=null p50=nullus p99=nullus err=1
+== security exit=0 elapsed=487s
+== storage: --warmup 5 --measure 30 storage
+["storage"] "avrora_kv_inproc" "write_scaling_vs_keys" {"size":"1KB","window":1000} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["stress"] "avrora_kv_inproc" "concurrency_ramp_write" {"size":"1KB","timing":{"measure_s":15.0,"warmup_s":3.0},"workers":1} ops/s=75.67 MB/s=0.07 p50=13015.63us p99=17022.67us err=0
+["stress"] "avrora_kv_inproc" "concurrency_ramp_write" {"size":"1KB","timing":{"measure_s":15.0,"warmup_s":3.0},"workers":2} ops/s=69.93 MB/s=0.07 p50=28112.83us p99=35035.92us err=0
+["stress"] "avrora_kv_inproc" "concurrency_ramp_write" {"size":"1KB","timing":{"measure_s":15.0,"warmup_s":3.0},"workers":4} ops/s=66.07 MB/s=0.06 p50=60120.46us p99=67020.29us err=0
+["stress"] "avrora_kv_inproc" "concurrency_ramp_write" {"size":"1KB","timing":{"measure_s":15.0,"warmup_s":3.0},"workers":8} ops/s=64.13 MB/s=0.06 p50=124051.21us p99=141983.46us err=0
+["stress"] "avrora_kv_inproc" "concurrency_ramp_write" {"size":"1KB","timing":{"measure_s":15.0,"warmup_s":3.0},"workers":16} ops/s=58.13 MB/s=0.06 p50=259945.83us p99=560994.71us err=0
+["stress"] "avrora_kv_inproc" "concurrency_ramp_write" {"size":"1KB","timing":{"measure_s":15.0,"warmup_s":3.0},"workers":32} ops/s=57.27 MB/s=0.06 p50=559091.88us p99=576961.96us err=0
+["stress"] "avrora_kv_inproc" "concurrency_ramp_write" {"size":"1KB","timing":{"measure_s":15.0,"warmup_s":3.0},"workers":64} ops/s=53.33 MB/s=0.05 p50=1193958.67us p99=1273960.63us err=0
+["stress"] "avrora_kv_inproc" "concurrency_ramp_read" {"size":"1KB","timing":{"measure_s":15.0,"warmup_s":3.0},"workers":1} ops/s=528088.7 MB/s=515.71 p50=1.58us p99=4.42us err=0
+["stress"] "avrora_kv_inproc" "concurrency_ramp_read" {"size":"1KB","timing":{"measure_s":15.0,"warmup_s":3.0},"workers":2} ops/s=476551.34 MB/s=465.38 p50=4.04us p99=5.33us err=0
+["stress"] "avrora_kv_inproc" "concurrency_ramp_read" {"size":"1KB","timing":{"measure_s":15.0,"warmup_s":3.0},"workers":4} ops/s=452692.54 MB/s=442.08 p50=8.42us p99=15.79us err=0
+["stress"] "avrora_kv_inproc" "concurrency_ramp_read" {"size":"1KB","timing":{"measure_s":15.0,"warmup_s":3.0},"workers":8} ops/s=478181.34 MB/s=466.97 p50=16.58us p99=20.83us err=0
+["stress"] "avrora_kv_inproc" "concurrency_ramp_read" {"size":"1KB","timing":{"measure_s":15.0,"warmup_s":3.0},"workers":16} ops/s=470840.3 MB/s=459.8 p50=33.63us p99=43.5us err=0
+["stress"] "avrora_kv_inproc" "concurrency_ramp_read" {"size":"1KB","timing":{"measure_s":15.0,"warmup_s":3.0},"workers":32} ops/s=447561.18 MB/s=437.07 p50=68.21us p99=148.46us err=0
+["stress"] "avrora_kv_inproc" "concurrency_ramp_read" {"size":"1KB","timing":{"measure_s":15.0,"warmup_s":3.0},"workers":64} ops/s=439459.77 MB/s=429.16 p50=137.75us p99=314.96us err=0
+["storage"] "avrora_kv_inproc" "preload_sequential" {"rows":10000,"size":"100B"} ops/s=60.92 MB/s=0.01 p50=nullus p99=nullus err=0
+["storage"] "avrora_kv_inproc" "write" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=41.1 MB/s=0.0 p50=23999.83us p99=32970.83us err=0
+["storage"] "avrora_kv_inproc" "read" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=584370.07 MB/s=55.73 p50=1.54us p99=3.08us err=0
+["storage"] "avrora_kv_inproc" "random_read" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=544076.91 MB/s=51.89 p50=1.71us p99=3.04us err=0
+["storage"] "avrora_kv_inproc" "random_rw" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=79.0 MB/s=0.01 p50=32.46us p99=40386.21us err=0
+["storage"] "avrora_kv_inproc" "batch_write" {"batch":100,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=40.0 MB/s=0.0 p50=2573127.0us p99=2627984.79us err=0
+["storage"] "avrora_kv_inproc" "batch_read" {"batch":100,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=655368.28 MB/s=62.5 p50=150.04us p99=195.54us err=0
+["storage"] "avrora_kv_inproc" "concurrent_read" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=439146.88 MB/s=41.88 p50=35.63us p99=51.67us err=0
+["storage"] "avrora_kv_inproc" "concurrent_write" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=36.4 MB/s=0.0 p50=442807.17us p99=465960.63us err=0
+["storage"] "avrora_kv_inproc" "mixed_80r_20w" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=174.9 MB/s=0.02 p50=86799.88us p99=204944.96us err=0
+["storage"] "avrora_kv_inproc" "data_dir_total" {"size":"100B"} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["storage"] "avrora_kv_inproc" "preload_sequential" {"rows":10000,"size":"1KB"} ops/s=63.92 MB/s=0.06 p50=nullus p99=nullus err=0
+["storage"] "avrora_kv_inproc" "write" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=42.0 MB/s=0.04 p50=23957.38us p99=29105.46us err=0
+["storage"] "avrora_kv_inproc" "read" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=601350.37 MB/s=587.26 p50=1.54us p99=2.46us err=0
+["storage"] "avrora_kv_inproc" "random_read" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=550358.12 MB/s=537.46 p50=1.71us p99=2.75us err=0
+["storage"] "avrora_kv_inproc" "random_rw" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=80.03 MB/s=0.08 p50=21943.08us p99=26641.29us err=0
+["storage"] "avrora_kv_inproc" "batch_write" {"batch":100,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=36.67 MB/s=0.04 p50=2568088.88us p99=2704975.83us err=0
+["storage"] "avrora_kv_inproc" "batch_read" {"batch":100,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=621181.18 MB/s=606.62 p50=158.58us p99=203.83us err=0
+["storage"] "avrora_kv_inproc" "concurrent_read" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=422694.27 MB/s=412.79 p50=36.88us p99=58.75us err=0
+["storage"] "avrora_kv_inproc" "concurrent_write" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=34.17 MB/s=0.03 p50=454154.38us p99=700237.54us err=0
+["storage"] "avrora_kv_inproc" "mixed_80r_20w" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=162.57 MB/s=0.16 p50=89017.83us p99=268118.21us err=0
+["storage"] "avrora_kv_inproc" "data_dir_total" {"size":"1KB"} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["storage"] "avrora_kv_inproc" "preload_sequential" {"rows":10000,"size":"10KB"} ops/s=64.15 MB/s=0.63 p50=nullus p99=nullus err=0
+["storage"] "avrora_kv_inproc" "write" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=42.1 MB/s=0.41 p50=23922.96us p99=27467.71us err=0
+["storage"] "avrora_kv_inproc" "read" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=479092.6 MB/s=4678.64 p50=1.96us p99=3.17us err=0
+["storage"] "avrora_kv_inproc" "random_read" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=419484.29 MB/s=4096.53 p50=2.25us p99=3.71us err=0
+["storage"] "avrora_kv_inproc" "random_rw" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=80.43 MB/s=0.79 p50=31.67us p99=29059.04us err=0
+["storage"] "avrora_kv_inproc" "batch_write" {"batch":100,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=36.67 MB/s=0.36 p50=2559851.63us p99=2713022.71us err=0
+["storage"] "avrora_kv_inproc" "batch_read" {"batch":100,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=507854.21 MB/s=4959.51 p50=193.25us p99=245.04us err=0
+["storage"] "avrora_kv_inproc" "concurrent_read" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=382161.45 MB/s=3732.05 p50=41.58us p99=46.54us err=0
+["storage"] "avrora_kv_inproc" "concurrent_write" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=36.03 MB/s=0.35 p50=446038.92us p99=505015.71us err=0
+["storage"] "avrora_kv_inproc" "mixed_80r_20w" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=178.97 MB/s=1.75 p50=85135.46us p99=224916.13us err=0
+["storage"] "avrora_kv_inproc" "data_dir_total" {"size":"10KB"} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["storage"] "avrora_kv_inproc" "preload_sequential" {"rows":2621,"size":"100KB"} ops/s=77.29 MB/s=7.55 p50=nullus p99=nullus err=0
+["storage"] "avrora_kv_inproc" "write" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=63.4 MB/s=6.19 p50=15837.58us p99=21528.79us err=0
+["storage"] "avrora_kv_inproc" "read" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=229867.08 MB/s=22447.96 p50=4.13us p99=6.88us err=0
+["storage"] "avrora_kv_inproc" "random_read" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=246881.41 MB/s=24109.51 p50=3.92us p99=5.29us err=0
+["storage"] "avrora_kv_inproc" "random_rw" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=116.7 MB/s=11.4 p50=18.46us p99=19723.17us err=0
+["storage"] "avrora_kv_inproc" "batch_write" {"batch":100,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=56.67 MB/s=5.53 p50=1862010.08us p99=2094110.63us err=0
+["storage"] "avrora_kv_inproc" "batch_read" {"batch":100,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=230601.47 MB/s=22519.67 p50=410.79us p99=516.63us err=0
+["storage"] "avrora_kv_inproc" "concurrent_read" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=191104.73 MB/s=18662.57 p50=81.04us p99=118.63us err=0
+["storage"] "avrora_kv_inproc" "concurrent_write" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=45.93 MB/s=4.49 p50=345768.42us p99=568043.33us err=0
+["storage"] "avrora_kv_inproc" "mixed_80r_20w" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=228.08 MB/s=22.27 p50=67161.04us p99=162560.38us err=0
+["storage"] "avrora_kv_inproc" "data_dir_total" {"size":"100KB"} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["storage"] "avrora_kv_inproc" "preload_sequential" {"rows":256,"size":"1MB"} ops/s=28.97 MB/s=28.97 p50=nullus p99=nullus err=0
+["storage"] "avrora_kv_inproc" "write" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=27.89 MB/s=27.89 p50=35044.17us p99=51029.04us err=0
+["storage"] "avrora_kv_inproc" "read" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=47005.72 MB/s=47005.72 p50=19.79us p99=41.5us err=0
+["storage"] "avrora_kv_inproc" "random_read" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=45865.98 MB/s=45865.98 p50=20.42us p99=41.13us err=0
+["storage"] "avrora_kv_inproc" "random_rw" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=55.22 MB/s=55.22 p50=32852.38us p99=45855.63us err=0
+["storage"] "avrora_kv_inproc" "batch_write" {"batch":100,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=24.58 MB/s=24.58 p50=3735163.08us p99=3805862.46us err=0
+["storage"] "avrora_kv_inproc" "batch_read" {"batch":100,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=42291.87 MB/s=42291.87 p50=2276.71us p99=2551.75us err=0
+["storage"] "avrora_kv_inproc" "concurrent_read" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=47338.87 MB/s=47338.87 p50=320.25us p99=593.21us err=0
+["storage"] "avrora_kv_inproc" "concurrent_write" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=26.39 MB/s=26.39 p50=603790.92us p99=677476.88us err=0
+["storage"] "avrora_kv_inproc" "mixed_80r_20w" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=132.51 MB/s=132.51 p50=113127.21us p99=297835.08us err=0
+["storage"] "avrora_kv_inproc" "data_dir_total" {"size":"1MB"} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+== storage exit=0 elapsed=2101s
+== pg_default: --warmup 5 --measure 30 pg
+["pg"] "postgres_default" "settings" {"size":"100B"} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["storage"] "postgres_default" "preload_sequential" {"rows":10000,"size":"100B"} ops/s=28851.51 MB/s=2.75 p50=nullus p99=nullus err=0
+["storage"] "postgres_default" "write" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=33307.47 MB/s=3.18 p50=27.79us p99=51.17us err=0
+["storage"] "postgres_default" "read" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=80995.23 MB/s=7.72 p50=11.79us p99=28.33us err=0
+["storage"] "postgres_default" "random_read" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=79400.2 MB/s=7.57 p50=11.96us p99=25.75us err=0
+["storage"] "postgres_default" "random_rw" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=46225.1 MB/s=4.41 p50=25.29us p99=45.25us err=0
+["storage"] "postgres_default" "batch_write" {"batch":100,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=376547.86 MB/s=35.91 p50=230.58us p99=528.08us err=0
+["storage"] "postgres_default" "batch_read" {"batch":100,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=1196648.11 MB/s=114.12 p50=82.21us p99=111.29us err=0
+["storage"] "postgres_default" "concurrent_read" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=285245.14 MB/s=27.2 p50=47.0us p99=185.75us err=0
+["storage"] "postgres_default" "concurrent_write" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=98504.33 MB/s=9.39 p50=131.5us p99=1180.33us err=0
+["storage"] "postgres_default" "mixed_80r_20w" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=224263.76 MB/s=21.39 p50=54.83us p99=269.46us err=0
+["sql"] "postgres_default_simple_query" "insert" {"batch":1,"dataset_rows":2000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=22657.43 MB/s=2.16 p50=30.17us p99=247.33us err=0
+["sql"] "postgres_default_simple_query" "select_pk" {"batch":1,"dataset_rows":2000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=57228.33 MB/s=5.46 p50=16.42us p99=31.25us err=0
+["sql"] "postgres_default_simple_query" "batch_insert" {"batch":100,"dataset_rows":2000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=307910.0 MB/s=29.36 p50=333.83us p99=614.08us err=0
+["sql"] "postgres_default_simple_query" "select_scan_limit100" {"batch":1,"dataset_rows":2000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=2766426.67 MB/s=263.83 p50=35.5us p99=50.92us err=0
+["pg"] "postgres_default" "settings" {"size":"1KB"} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["storage"] "postgres_default" "preload_sequential" {"rows":10000,"size":"1KB"} ops/s=26666.21 MB/s=26.04 p50=nullus p99=nullus err=0
+["storage"] "postgres_default" "write" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=31546.7 MB/s=30.81 p50=29.46us p99=48.08us err=0
+["storage"] "postgres_default" "read" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=80410.8 MB/s=78.53 p50=12.04us p99=24.92us err=0
+["storage"] "postgres_default" "random_read" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=79367.07 MB/s=77.51 p50=12.13us p99=25.17us err=0
+["storage"] "postgres_default" "random_rw" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=47095.81 MB/s=45.99 p50=27.04us p99=42.75us err=0
+["storage"] "postgres_default" "batch_write" {"batch":100,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=144776.98 MB/s=141.38 p50=597.96us p99=1424.83us err=0
+["storage"] "postgres_default" "batch_read" {"batch":100,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=956934.45 MB/s=934.51 p50=108.04us p99=133.5us err=0
+["storage"] "postgres_default" "concurrent_read" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=318227.42 MB/s=310.77 p50=46.42us p99=126.79us err=0
+["storage"] "postgres_default" "concurrent_write" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=56788.8 MB/s=55.46 p50=222.42us p99=1316.67us err=0
+["storage"] "postgres_default" "mixed_80r_20w" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=234031.27 MB/s=228.55 p50=53.08us p99=239.29us err=0
+["sql"] "postgres_default_simple_query" "insert" {"batch":1,"dataset_rows":2000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=20019.1 MB/s=19.55 p50=35.33us p99=201.08us err=0
+["sql"] "postgres_default_simple_query" "select_pk" {"batch":1,"dataset_rows":2000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=58185.73 MB/s=56.82 p50=16.46us p99=30.38us err=0
+["sql"] "postgres_default_simple_query" "batch_insert" {"batch":100,"dataset_rows":2000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=103333.33 MB/s=100.91 p50=883.25us p99=1925.71us err=0
+["sql"] "postgres_default_simple_query" "select_scan_limit100" {"batch":1,"dataset_rows":2000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=1517513.33 MB/s=1481.95 p50=62.54us p99=123.04us err=0
+["pg"] "postgres_default" "settings" {"size":"10KB"} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["storage"] "postgres_default" "preload_sequential" {"rows":10000,"size":"10KB"} ops/s=8152.98 MB/s=79.62 p50=nullus p99=nullus err=0
+["storage"] "postgres_default" "write" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=7715.4 MB/s=75.35 p50=109.46us p99=336.83us err=0
+["storage"] "postgres_default" "read" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=43407.27 MB/s=423.9 p50=22.38us p99=36.46us err=0
+["storage"] "postgres_default" "random_read" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=41778.65 MB/s=407.99 p50=23.38us p99=37.0us err=0
+["storage"] "postgres_default" "random_rw" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=9414.56 MB/s=91.94 p50=106.46us p99=380.75us err=0
+["storage"] "postgres_default" "batch_write" {"batch":100,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=11053.31 MB/s=107.94 p50=8482.96us p99=10859.46us err=0
+["storage"] "postgres_default" "batch_read" {"batch":100,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=101385.43 MB/s=990.09 p50=975.63us p99=1156.75us err=0
+["storage"] "postgres_default" "concurrent_read" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=152620.18 MB/s=1490.43 p50=92.0us p99=384.04us err=0
+["storage"] "postgres_default" "concurrent_write" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=23699.58 MB/s=231.44 p50=534.46us p99=2122.75us err=0
+["storage"] "postgres_default" "mixed_80r_20w" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=61322.4 MB/s=598.85 p50=96.13us p99=1382.33us err=0
+["sql"] "postgres_default_simple_query" "insert" {"batch":1,"dataset_rows":2000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=3502.6 MB/s=34.21 p50=196.0us p99=1451.38us err=0
+["sql"] "postgres_default_simple_query" "select_pk" {"batch":1,"dataset_rows":2000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=42632.17 MB/s=416.33 p50=19.88us p99=43.0us err=0
+["sql"] "postgres_default_simple_query" "batch_insert" {"batch":50,"dataset_rows":2000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=6840.0 MB/s=66.8 p50=6006.79us p99=14624.71us err=0
+["sql"] "postgres_default_simple_query" "select_scan_limit100" {"batch":1,"dataset_rows":2000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=163580.0 MB/s=1597.46 p50=607.33us p99=904.58us err=0
+["pg"] "postgres_default" "settings" {"size":"100KB"} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["storage"] "postgres_default" "preload_sequential" {"rows":2621,"size":"100KB"} ops/s=942.54 MB/s=92.04 p50=nullus p99=nullus err=0
+["storage"] "postgres_default" "write" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=875.03 MB/s=85.45 p50=1005.21us p99=2100.5us err=0
+["storage"] "postgres_default" "read" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=8932.29 MB/s=872.29 p50=111.33us p99=133.83us err=0
+["storage"] "postgres_default" "random_read" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=9117.69 MB/s=890.4 p50=108.38us p99=155.21us err=0
+["storage"] "postgres_default" "random_rw" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=1496.45 MB/s=146.14 p50=399.17us p99=1727.0us err=0
+["storage"] "postgres_default" "batch_write" {"batch":100,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=626.66 MB/s=61.2 p50=157352.46us p99=191321.88us err=0
+["storage"] "postgres_default" "batch_read" {"batch":100,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=9277.87 MB/s=906.04 p50=10526.0us p99=11968.96us err=0
+["storage"] "postgres_default" "concurrent_read" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=31655.48 MB/s=3091.36 p50=467.21us p99=1441.92us err=0
+["storage"] "postgres_default" "concurrent_write" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=3353.6 MB/s=327.5 p50=3029.71us p99=21960.79us err=0
+["storage"] "postgres_default" "mixed_80r_20w" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=8395.73 MB/s=819.9 p50=720.5us p99=7053.96us err=0
+["sql"] "postgres_default_simple_query" "insert" {"batch":1,"dataset_rows":2000,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=498.27 MB/s=48.66 p50=1748.08us p99=4963.17us err=0
+["sql"] "postgres_default_simple_query" "select_pk" {"batch":1,"dataset_rows":2000,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=11560.97 MB/s=1129.0 p50=83.5us p99=135.29us err=0
+["sql"] "postgres_default_simple_query" "batch_insert" {"batch":5,"dataset_rows":2000,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=645.0 MB/s=62.99 p50=6555.42us p99=12361.08us err=0
+["sql"] "postgres_default_simple_query" "select_scan_limit100" {"batch":1,"dataset_rows":2000,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=11040.0 MB/s=1078.13 p50=9515.96us p99=9934.67us err=0
+["pg"] "postgres_default" "settings" {"size":"1MB"} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["storage"] "postgres_default" "preload_sequential" {"rows":256,"size":"1MB"} ops/s=94.83 MB/s=94.83 p50=nullus p99=nullus err=0
+["storage"] "postgres_default" "write" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=92.07 MB/s=92.07 p50=10078.96us p99=14180.54us err=0
+["storage"] "postgres_default" "read" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=972.04 MB/s=972.04 p50=1033.08us p99=1187.42us err=0
+["storage"] "postgres_default" "random_read" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=1030.37 MB/s=1030.37 p50=972.83us p99=1133.38us err=0
+["storage"] "postgres_default" "random_rw" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=174.62 MB/s=174.62 p50=1614.58us p99=11825.54us err=0
+["storage"] "postgres_default" "batch_write" {"batch":100,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=27.57 MB/s=27.57 p50=2634576.75us p99=7697134.58us err=0
+["storage"] "postgres_default" "batch_read" {"batch":100,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=1249.74 MB/s=1249.74 p50=73245.21us p99=74686.29us err=0
+["storage"] "postgres_default" "concurrent_read" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=3094.14 MB/s=3094.14 p50=5115.88us p99=7205.63us err=0
+["storage"] "postgres_default" "concurrent_write" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=230.16 MB/s=230.16 p50=45130.92us p99=385257.0us err=0
+["storage"] "postgres_default" "mixed_80r_20w" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=417.19 MB/s=417.19 p50=5629.58us p99=420142.54us err=0
+== pg_default exit=0 elapsed=1170s
+== pg_writethru: --warmup 5 --measure 30 pg --wal-sync-method fsync_writethrough
+["pg"] "postgres_fsync_writethrough" "settings" {"size":"100B"} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["storage"] "postgres_fsync_writethrough" "preload_sequential" {"rows":10000,"size":"100B"} ops/s=249.22 MB/s=0.02 p50=nullus p99=nullus err=0
+["storage"] "postgres_fsync_writethrough" "write" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=255.2 MB/s=0.02 p50=3987.04us p99=4710.13us err=0
+["storage"] "postgres_fsync_writethrough" "read" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=82344.37 MB/s=7.85 p50=11.71us p99=24.63us err=0
+["storage"] "postgres_fsync_writethrough" "random_read" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=82400.1 MB/s=7.86 p50=11.75us p99=24.38us err=0
+["storage"] "postgres_fsync_writethrough" "random_rw" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=542.73 MB/s=0.05 p50=2742.25us p99=4392.71us err=0
+["storage"] "postgres_fsync_writethrough" "batch_write" {"batch":100,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=23553.33 MB/s=2.25 p50=4024.29us p99=5965.75us err=0
+["storage"] "postgres_fsync_writethrough" "batch_read" {"batch":100,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=1603291.07 MB/s=152.9 p50=62.17us p99=76.83us err=0
+["storage"] "postgres_fsync_writethrough" "concurrent_read" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=323673.64 MB/s=30.87 p50=44.96us p99=132.79us err=0
+["storage"] "postgres_fsync_writethrough" "concurrent_write" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=2201.87 MB/s=0.21 p50=7086.46us p99=9475.42us err=0
+["storage"] "postgres_fsync_writethrough" "mixed_80r_20w" {"batch":1,"dataset_rows":10000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=11311.77 MB/s=1.08 p50=76.83us p99=7965.04us err=0
+["sql"] "postgres_fsync_writethrough_simple_query" "insert" {"batch":1,"dataset_rows":2000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=302.37 MB/s=0.03 p50=3048.33us p99=4190.63us err=0
+["sql"] "postgres_fsync_writethrough_simple_query" "select_pk" {"batch":1,"dataset_rows":2000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=58992.77 MB/s=5.63 p50=16.17us p99=29.92us err=0
+["sql"] "postgres_fsync_writethrough_simple_query" "batch_insert" {"batch":100,"dataset_rows":2000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=22383.33 MB/s=2.13 p50=4105.04us p99=6046.63us err=0
+["sql"] "postgres_fsync_writethrough_simple_query" "select_scan_limit100" {"batch":1,"dataset_rows":2000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=2774156.67 MB/s=264.56 p50=35.71us p99=50.46us err=0
+["pg"] "postgres_fsync_writethrough" "settings" {"size":"1KB"} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["storage"] "postgres_fsync_writethrough" "preload_sequential" {"rows":10000,"size":"1KB"} ops/s=252.35 MB/s=0.25 p50=nullus p99=nullus err=0
+["storage"] "postgres_fsync_writethrough" "write" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=258.77 MB/s=0.25 p50=3980.75us p99=4331.0us err=0
+["storage"] "postgres_fsync_writethrough" "read" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=79939.35 MB/s=78.07 p50=12.13us p99=25.04us err=0
+["storage"] "postgres_fsync_writethrough" "random_read" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=80081.63 MB/s=78.2 p50=12.04us p99=24.92us err=0
+["storage"] "postgres_fsync_writethrough" "random_rw" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=497.87 MB/s=0.49 p50=500.21us p99=4676.21us err=0
+["storage"] "postgres_fsync_writethrough" "batch_write" {"batch":100,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=17871.24 MB/s=17.45 p50=5036.71us p99=12618.92us err=0
+["storage"] "postgres_fsync_writethrough" "batch_read" {"batch":100,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=933642.75 MB/s=911.76 p50=108.21us p99=131.75us err=0
+["storage"] "postgres_fsync_writethrough" "concurrent_read" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=316233.63 MB/s=308.82 p50=45.29us p99=140.54us err=0
+["storage"] "postgres_fsync_writethrough" "concurrent_write" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=2224.37 MB/s=2.17 p50=6951.0us p99=14110.46us err=0
+["storage"] "postgres_fsync_writethrough" "mixed_80r_20w" {"batch":1,"dataset_rows":10000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=11984.57 MB/s=11.7 p50=83.79us p99=7695.04us err=0
+["sql"] "postgres_fsync_writethrough_simple_query" "insert" {"batch":1,"dataset_rows":2000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=282.77 MB/s=0.28 p50=3611.21us p99=4945.38us err=0
+["sql"] "postgres_fsync_writethrough_simple_query" "select_pk" {"batch":1,"dataset_rows":2000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=56867.4 MB/s=55.53 p50=16.67us p99=30.88us err=0
+["sql"] "postgres_fsync_writethrough_simple_query" "batch_insert" {"batch":100,"dataset_rows":2000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=17030.0 MB/s=16.63 p50=5921.33us p99=11969.83us err=0
+["sql"] "postgres_fsync_writethrough_simple_query" "select_scan_limit100" {"batch":1,"dataset_rows":2000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=1360960.0 MB/s=1329.06 p50=68.88us p99=158.79us err=0
+["pg"] "postgres_fsync_writethrough" "settings" {"size":"10KB"} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["storage"] "postgres_fsync_writethrough" "preload_sequential" {"rows":10000,"size":"10KB"} ops/s=238.17 MB/s=2.33 p50=nullus p99=nullus err=0
+["storage"] "postgres_fsync_writethrough" "write" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=241.5 MB/s=2.36 p50=4007.58us p99=6102.58us err=0
+["storage"] "postgres_fsync_writethrough" "read" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=41882.17 MB/s=409.01 p50=23.33us p99=39.0us err=0
+["storage"] "postgres_fsync_writethrough" "random_read" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=39616.86 MB/s=386.88 p50=24.67us p99=40.13us err=0
+["storage"] "postgres_fsync_writethrough" "random_rw" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=433.93 MB/s=4.24 p50=2102.21us p99=9034.96us err=0
+["storage"] "postgres_fsync_writethrough" "batch_write" {"batch":100,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=3876.19 MB/s=37.85 p50=19494.5us p99=107832.79us err=0
+["storage"] "postgres_fsync_writethrough" "batch_read" {"batch":100,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=63272.32 MB/s=617.89 p50=1217.08us p99=5878.04us err=0
+["storage"] "postgres_fsync_writethrough" "concurrent_read" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=143486.49 MB/s=1401.24 p50=98.88us p99=349.46us err=0
+["storage"] "postgres_fsync_writethrough" "concurrent_write" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=956.83 MB/s=9.34 p50=8485.08us p99=139079.21us err=0
+["storage"] "postgres_fsync_writethrough" "mixed_80r_20w" {"batch":1,"dataset_rows":10000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=3382.53 MB/s=33.03 p50=119.17us p99=78975.88us err=0
+["sql"] "postgres_fsync_writethrough_simple_query" "insert" {"batch":1,"dataset_rows":2000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=219.53 MB/s=2.14 p50=4418.21us p99=7995.04us err=0
+["sql"] "postgres_fsync_writethrough_simple_query" "select_pk" {"batch":1,"dataset_rows":2000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=33547.97 MB/s=327.62 p50=29.54us p99=43.25us err=0
+["sql"] "postgres_fsync_writethrough_simple_query" "batch_insert" {"batch":50,"dataset_rows":2000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=4773.33 MB/s=46.61 p50=9882.21us p99=17809.58us err=0
+["sql"] "postgres_fsync_writethrough_simple_query" "select_scan_limit100" {"batch":1,"dataset_rows":2000,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=166513.33 MB/s=1626.11 p50=594.75us p99=792.96us err=0
+["pg"] "postgres_fsync_writethrough" "settings" {"size":"100KB"} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["storage"] "postgres_fsync_writethrough" "preload_sequential" {"rows":2621,"size":"100KB"} ops/s=172.63 MB/s=16.86 p50=nullus p99=nullus err=0
+["storage"] "postgres_fsync_writethrough" "write" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=165.43 MB/s=16.16 p50=5973.54us p99=11343.29us err=0
+["storage"] "postgres_fsync_writethrough" "read" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=8036.16 MB/s=784.78 p50=115.92us p99=292.42us err=0
+["storage"] "postgres_fsync_writethrough" "random_read" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=8932.19 MB/s=872.28 p50=112.58us p99=138.42us err=0
+["storage"] "postgres_fsync_writethrough" "random_rw" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=332.23 MB/s=32.44 p50=1104.67us p99=9405.04us err=0
+["storage"] "postgres_fsync_writethrough" "batch_write" {"batch":100,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=711.06 MB/s=69.44 p50=126159.21us p99=240729.21us err=0
+["storage"] "postgres_fsync_writethrough" "batch_read" {"batch":100,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=9131.77 MB/s=891.77 p50=10805.88us p99=11032.21us err=0
+["storage"] "postgres_fsync_writethrough" "concurrent_read" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=32627.99 MB/s=3186.33 p50=424.17us p99=1206.33us err=0
+["storage"] "postgres_fsync_writethrough" "concurrent_write" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=682.71 MB/s=66.67 p50=15065.33us p99=96866.5us err=0
+["storage"] "postgres_fsync_writethrough" "mixed_80r_20w" {"batch":1,"dataset_rows":2621,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=4016.43 MB/s=392.23 p50=547.5us p99=31650.33us err=0
+["sql"] "postgres_fsync_writethrough_simple_query" "insert" {"batch":1,"dataset_rows":2000,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=159.93 MB/s=15.62 p50=6030.92us p99=12010.54us err=0
+["sql"] "postgres_fsync_writethrough_simple_query" "select_pk" {"batch":1,"dataset_rows":2000,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=9878.67 MB/s=964.71 p50=91.79us p99=144.46us err=0
+["sql"] "postgres_fsync_writethrough_simple_query" "batch_insert" {"batch":5,"dataset_rows":2000,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=413.17 MB/s=40.35 p50=10931.88us p99=29963.63us err=0
+["sql"] "postgres_fsync_writethrough_simple_query" "select_scan_limit100" {"batch":1,"dataset_rows":2000,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=11690.0 MB/s=1141.6 p50=9512.79us p99=10271.5us err=0
+["pg"] "postgres_fsync_writethrough" "settings" {"size":"1MB"} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["storage"] "postgres_fsync_writethrough" "preload_sequential" {"rows":256,"size":"1MB"} ops/s=63.33 MB/s=63.33 p50=nullus p99=nullus err=0
+["storage"] "postgres_fsync_writethrough" "write" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=59.14 MB/s=59.14 p50=13981.54us p99=46020.17us err=0
+["storage"] "postgres_fsync_writethrough" "read" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=724.49 MB/s=724.49 p50=1119.88us p99=5742.13us err=0
+["storage"] "postgres_fsync_writethrough" "random_read" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=992.23 MB/s=992.23 p50=1008.04us p99=1154.79us err=0
+["storage"] "postgres_fsync_writethrough" "random_rw" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=117.49 MB/s=117.49 p50=1496.04us p99=29968.46us err=0
+["storage"] "postgres_fsync_writethrough" "batch_write" {"batch":100,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=53.67 MB/s=53.67 p50=1713218.88us p99=2106659.0us err=0
+["storage"] "postgres_fsync_writethrough" "batch_read" {"batch":100,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=1100.7 MB/s=1100.7 p50=88058.71us p99=96145.63us err=0
+["storage"] "postgres_fsync_writethrough" "concurrent_read" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=3242.4 MB/s=3242.4 p50=4546.58us p99=9818.63us err=0
+["storage"] "postgres_fsync_writethrough" "concurrent_write" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=105.41 MB/s=105.41 p50=126080.75us p99=1004190.29us err=0
+["storage"] "postgres_fsync_writethrough" "mixed_80r_20w" {"batch":1,"dataset_rows":256,"size":"1MB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":16} ops/s=675.82 MB/s=675.82 p50=7391.04us p99=137514.04us err=0
+== pg_writethru exit=0 elapsed=1600s
+== sqlcore: --warmup 5 --measure 30 --sizes 100,1024,10240,102400,1048576 sql
+["sql"] "avrora_sqlcore_ipc" "request_limit_probe"  ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["sql"] "avrora_sqlcore_ipc" "persistent_concurrency_probe"  ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["sql"] "avrora_sqlcore_ipc" "preload_insert" {"rows":2000,"size":"100B"} ops/s=18.17 MB/s=null p50=nullus p99=nullus err=0
+["sql"] "avrora_sqlcore_ipc" "insert" {"batch":1,"dataset_rows":2000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=13.3 MB/s=0.0 p50=74954.29us p99=85887.88us err=0
+["sql"] "avrora_sqlcore_ipc" "select_pk" {"batch":1,"dataset_rows":2000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=46.7 MB/s=0.0 p50=21306.29us p99=25723.88us err=0
+["sql"] "avrora_sqlcore_ipc" "batch_insert" {"batch":100,"dataset_rows":2000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=13.33 MB/s=0.0 p50=8790162.29us p99=8828922.25us err=0
+["sql"] "avrora_sqlcore_ipc" "select_scan_limit100" {"batch":1,"dataset_rows":2000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=10866.67 MB/s=1.04 p50=8993.83us p99=11376.96us err=0
+["sql"] "avrora_sqlcore_ipc" "concurrent_insert_conn_per_op" {"batch":1,"dataset_rows":2000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":4} ops/s=10.7 MB/s=0.0 p50=376020.04us p99=394052.75us err=0
+["sql"] "avrora_sqlcore_ipc" "concurrent_select_conn_per_op" {"batch":1,"dataset_rows":2000,"size":"100B","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":4} ops/s=32.87 MB/s=0.0 p50=115219.21us p99=264675.79us err=0
+["sql"] "avrora_sqlcore_ipc" "preload_insert" {"rows":2000,"size":"1KB"} ops/s=17.39 MB/s=null p50=nullus p99=nullus err=0
+["sql"] "avrora_sqlcore_ipc" "insert" {"batch":1,"dataset_rows":2000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=12.5 MB/s=0.01 p50=78110.71us p99=123000.13us err=0
+["sql"] "avrora_sqlcore_ipc" "select_pk" {"batch":1,"dataset_rows":2000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=41.8 MB/s=0.04 p50=22507.54us p99=50672.88us err=0
+["sql"] "avrora_sqlcore_ipc" "batch_insert" {"batch":100,"dataset_rows":2000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=10.0 MB/s=0.01 p50=8935095.29us p99=9487103.5us err=0
+["sql"] "avrora_sqlcore_ipc" "select_scan_limit100" {"batch":1,"dataset_rows":2000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=9836.67 MB/s=9.61 p50=9659.0us p99=15562.5us err=0
+["sql"] "avrora_sqlcore_ipc" "concurrent_insert_conn_per_op" {"batch":1,"dataset_rows":2000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":4} ops/s=10.57 MB/s=0.01 p50=378978.0us p99=408844.13us err=0
+["sql"] "avrora_sqlcore_ipc" "concurrent_select_conn_per_op" {"batch":1,"dataset_rows":2000,"size":"1KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":4} ops/s=34.33 MB/s=0.03 p50=114715.38us p99=138974.25us err=0
+["sql"] "avrora_sqlcore_ipc" "preload_insert" {"rows":1638,"size":"10KB"} ops/s=15.23 MB/s=null p50=nullus p99=nullus err=0
+["sql"] "avrora_sqlcore_ipc" "insert" {"batch":1,"dataset_rows":1638,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=8.33 MB/s=0.08 p50=114141.13us p99=195743.29us err=0
+["sql"] "avrora_sqlcore_ipc" "select_pk" {"batch":1,"dataset_rows":1638,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=40.67 MB/s=0.4 p50=24225.54us p99=32154.0us err=0
+["sql"] "avrora_sqlcore_ipc" "batch_insert" {"batch":50,"dataset_rows":1638,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=8.33 MB/s=0.08 p50=5079959.0us p99=5261116.58us err=0
+["sql"] "avrora_sqlcore_ipc" "select_scan_limit100" {"batch":1,"dataset_rows":1638,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=5806.67 MB/s=56.71 p50=15876.67us p99=45925.38us err=0
+["sql"] "avrora_sqlcore_ipc" "concurrent_insert_conn_per_op" {"batch":1,"dataset_rows":1638,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":4} ops/s=7.33 MB/s=0.07 p50=456873.08us p99=1888973.71us err=0
+["sql"] "avrora_sqlcore_ipc" "concurrent_select_conn_per_op" {"batch":1,"dataset_rows":1638,"size":"10KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":4} ops/s=27.23 MB/s=0.27 p50=143201.17us p99=194937.08us err=0
+["sql"] "avrora_sqlcore_ipc" "preload_insert" {"rows":163,"size":"100KB"} ops/s=20.29 MB/s=null p50=nullus p99=nullus err=0
+["sql"] "avrora_sqlcore_ipc" "insert" {"batch":1,"dataset_rows":163,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=8.63 MB/s=0.84 p50=110809.83us p99=290471.88us err=0
+["sql"] "avrora_sqlcore_ipc" "select_pk" {"batch":1,"dataset_rows":163,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=44.2 MB/s=4.32 p50=20734.17us p99=58857.08us err=0
+["sql"] "avrora_sqlcore_ipc" "batch_insert" {"batch":5,"dataset_rows":163,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=6.17 MB/s=0.6 p50=667035.04us p99=1321964.04us err=0
+
+thread '<unnamed>' (6106790) panicked at crates/dmc-bench/src/bin/bench_v1/sqlcore.rs:94:17:
+connect: Protocol(Io("Connection refused (os error 61)"))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+["sql"] "avrora_sqlcore_ipc" "select_scan_limit100" {"batch":1,"dataset_rows":163,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":1} ops/s=0.0 MB/s=0.0 p50=nullus p99=nullus err=0
+
+thread '<unnamed>' (6106793) panicked at crates/dmc-bench/src/bin/bench_v1/sqlcore.rs:94:17:
+connect: Protocol(Io("Connection refused (os error 61)"))
+
+thread '<unnamed>' (6106795) panicked at crates/dmc-bench/src/bin/bench_v1/sqlcore.rs:94:17:
+connect: Protocol(Io("Connection refused (os error 61)"))
+
+thread '<unnamed>' (6106796) panicked at crates/dmc-bench/src/bin/bench_v1/sqlcore.rs:94:17:
+connect: Protocol(Io("Connection refused (os error 61)"))
+
+thread '<unnamed>' (6106794) panicked at crates/dmc-bench/src/bin/bench_v1/sqlcore.rs:94:17:
+connect: Protocol(Io("Connection refused (os error 61)"))
+["sql"] "avrora_sqlcore_ipc" "concurrent_insert_conn_per_op" {"batch":1,"dataset_rows":163,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":4} ops/s=0.0 MB/s=0.0 p50=nullus p99=nullus err=0
+
+thread '<unnamed>' (6106804) panicked at crates/dmc-bench/src/bin/bench_v1/sqlcore.rs:94:17:
+connect: Protocol(Io("Connection refused (os error 61)"))
+
+thread '<unnamed>' (6106805) panicked at crates/dmc-bench/src/bin/bench_v1/sqlcore.rs:94:17:
+connect: Protocol(Io("Connection refused (os error 61)"))
+
+thread '<unnamed>' (6106806) panicked at crates/dmc-bench/src/bin/bench_v1/sqlcore.rs:94:17:
+connect: Protocol(Io("Connection refused (os error 61)"))
+
+thread '<unnamed>' (6106807) panicked at crates/dmc-bench/src/bin/bench_v1/sqlcore.rs:94:17:
+connect: Protocol(Io("Connection refused (os error 61)"))
+["sql"] "avrora_sqlcore_ipc" "concurrent_select_conn_per_op" {"batch":1,"dataset_rows":163,"size":"100KB","timing":{"measure_s":30.0,"warmup_s":5.0},"workers":4} ops/s=0.0 MB/s=0.0 p50=nullus p99=nullus err=0
+["sql"] "avrora_sqlcore_ipc" "preload_insert" {"rows":50,"size":"1MB"} ops/s=585.68 MB/s=null p50=nullus p99=nullus err=21
+["sql"] "avrora_sqlcore_ipc" "size_unsupported" {"size":"1MB"} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["sql"] "avrora_sqlcore_ipc" "insert_degradation_1KB" {"size":"1KB","window":500} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+== sqlcore exit=0 elapsed=1402s
+== channel_1KB: --warmup 5 --measure 30 channel --size 1024 --ramp
+["channel"] "avrora_runtime_inproc" "1P_1C" {"ack_batch":false,"ack_on_attempt":1,"consumers":1,"never_ack":false,"producers":1,"retry_max_attempts":32,"same_path":false,"size":1024,"target_rate":null,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=38.53 MB/s=0.04 p50=20838106.58us p99=23472040.75us err=0
+["channel"] "avrora_runtime_inproc" "10P_1C" {"ack_batch":false,"ack_on_attempt":1,"consumers":1,"never_ack":false,"producers":10,"retry_max_attempts":32,"same_path":false,"size":1024,"target_rate":null,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=72.2 MB/s=0.07 p50=94499040.25us p99=126776925.88us err=0
+["channel"] "avrora_runtime_inproc" "1P_10C" {"ack_batch":false,"ack_on_attempt":1,"consumers":10,"never_ack":false,"producers":1,"retry_max_attempts":32,"same_path":false,"size":1024,"target_rate":null,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=8.13 MB/s=0.01 p50=20772978.75us p99=32921855.25us err=0
+["channel"] "avrora_runtime_inproc" "10P_10C" {"ack_batch":false,"ack_on_attempt":1,"consumers":10,"never_ack":false,"producers":10,"retry_max_attempts":32,"same_path":false,"size":1024,"target_rate":null,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=36.63 MB/s=0.04 p50=129343248.08us p99=148145063.63us err=0
+["channel"] "avrora_runtime_inproc" "1P_1C_same_path" {"ack_batch":false,"ack_on_attempt":1,"consumers":1,"never_ack":false,"producers":1,"retry_max_attempts":32,"same_path":true,"size":1024,"target_rate":null,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=42.77 MB/s=0.04 p50=20346158.17us p99=24068938.33us err=0
+["channel"] "avrora_runtime_inproc" "1P_1C_ack_batch" {"ack_batch":true,"ack_on_attempt":1,"consumers":1,"never_ack":false,"producers":1,"retry_max_attempts":32,"same_path":false,"size":1024,"target_rate":null,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=38.87 MB/s=0.04 p50=20606110.83us p99=23295016.88us err=0
+["channel"] "avrora_runtime_inproc" "1P_1C_retry_ack_on_2nd" {"ack_batch":false,"ack_on_attempt":2,"consumers":1,"never_ack":false,"producers":1,"retry_max_attempts":32,"same_path":false,"size":1024,"target_rate":null,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=36.13 MB/s=0.04 p50=38257181.33us p99=51103982.25us err=0
+["channel"] "avrora_runtime_inproc" "1P_1C_dlq_max3" {"ack_batch":false,"ack_on_attempt":1,"consumers":1,"never_ack":true,"producers":1,"retry_max_attempts":3,"same_path":false,"size":1024,"target_rate":null,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=21.63 MB/s=0.02 p50=55991114.63us p99=110722908.83us err=0
+["channel"] "avrora_runtime_inproc" "backpressure_inflight_probe"  ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["channel"] "avrora_runtime_inproc" "ramp_1P_1C_5" {"ack_batch":false,"ack_on_attempt":1,"consumers":1,"never_ack":false,"producers":1,"retry_max_attempts":32,"same_path":false,"size":1024,"target_rate":5.0,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=5.03 MB/s=0.0 p50=20719.58us p99=24873.92us err=0
+["channel"] "avrora_runtime_inproc" "ramp_verdict" {"consumers":1,"size":1024,"target_rate":5.0} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["channel"] "avrora_runtime_inproc" "ramp_1P_1C_10" {"ack_batch":false,"ack_on_attempt":1,"consumers":1,"never_ack":false,"producers":1,"retry_max_attempts":32,"same_path":false,"size":1024,"target_rate":10.0,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=10.03 MB/s=0.01 p50=20593.0us p99=26534.42us err=0
+["channel"] "avrora_runtime_inproc" "ramp_verdict" {"consumers":1,"size":1024,"target_rate":10.0} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["channel"] "avrora_runtime_inproc" "ramp_1P_1C_20" {"ack_batch":false,"ack_on_attempt":1,"consumers":1,"never_ack":false,"producers":1,"retry_max_attempts":32,"same_path":false,"size":1024,"target_rate":20.0,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=20.03 MB/s=0.02 p50=22312.08us p99=30174.83us err=0
+["channel"] "avrora_runtime_inproc" "ramp_verdict" {"consumers":1,"size":1024,"target_rate":20.0} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["channel"] "avrora_runtime_inproc" "ramp_1P_1C_30" {"ack_batch":false,"ack_on_attempt":1,"consumers":1,"never_ack":false,"producers":1,"retry_max_attempts":32,"same_path":false,"size":1024,"target_rate":30.0,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=30.03 MB/s=0.03 p50=644928.33us p99=2581602.88us err=0
+["channel"] "avrora_runtime_inproc" "ramp_verdict" {"consumers":1,"size":1024,"target_rate":30.0} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["channel"] "avrora_runtime_inproc" "ramp_1P_1C_40" {"ack_batch":false,"ack_on_attempt":1,"consumers":1,"never_ack":false,"producers":1,"retry_max_attempts":32,"same_path":false,"size":1024,"target_rate":40.0,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=38.4 MB/s=0.04 p50=16160922.54us p99=19237994.96us err=0
+["channel"] "avrora_runtime_inproc" "ramp_verdict" {"consumers":1,"size":1024,"target_rate":40.0} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["channel"] "avrora_runtime_inproc" "MAX_STABLE" {"consumers":1,"producers":1,"size":1024} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["channel"] "avrora_runtime_inproc" "ramp_1P_10C_5" {"ack_batch":false,"ack_on_attempt":1,"consumers":10,"never_ack":false,"producers":1,"retry_max_attempts":32,"same_path":false,"size":1024,"target_rate":5.0,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=5.03 MB/s=0.0 p50=1885006.21us p99=3888207.13us err=0
+["channel"] "avrora_runtime_inproc" "ramp_verdict" {"consumers":10,"size":1024,"target_rate":5.0} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["channel"] "avrora_runtime_inproc" "ramp_1P_10C_10" {"ack_batch":false,"ack_on_attempt":1,"consumers":10,"never_ack":false,"producers":1,"retry_max_attempts":32,"same_path":false,"size":1024,"target_rate":10.0,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=8.07 MB/s=0.01 p50=20133938.5us p99=31482095.58us err=0
+["channel"] "avrora_runtime_inproc" "ramp_verdict" {"consumers":10,"size":1024,"target_rate":10.0} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+["channel"] "avrora_runtime_inproc" "MAX_STABLE" {"consumers":10,"producers":1,"size":1024} ops/s=null MB/s=null p50=nullus p99=nullus err=null
+== channel_1KB exit=0 elapsed=1094s
+== channel_100KB: --warmup 5 --measure 30 channel --size 102400
+["channel"] "avrora_runtime_inproc" "1P_1C" {"ack_batch":false,"ack_on_attempt":1,"consumers":1,"never_ack":false,"producers":1,"retry_max_attempts":32,"same_path":false,"size":102400,"target_rate":null,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=10.13 MB/s=0.99 p50=32827368.54us p99=36183384.71us err=0
+["channel"] "avrora_runtime_inproc" "10P_1C" {"ack_batch":false,"ack_on_attempt":1,"consumers":1,"never_ack":false,"producers":10,"retry_max_attempts":32,"same_path":false,"size":102400,"target_rate":null,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=23.17 MB/s=2.26 p50=nullus p99=nullus err=0
+["channel"] "avrora_runtime_inproc" "1P_10C" {"ack_batch":false,"ack_on_attempt":1,"consumers":10,"never_ack":false,"producers":1,"retry_max_attempts":32,"same_path":false,"size":102400,"target_rate":null,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=3.13 MB/s=0.31 p50=31638123.0us p99=38426183.71us err=0
+["channel"] "avrora_runtime_inproc" "10P_10C" {"ack_batch":false,"ack_on_attempt":1,"consumers":10,"never_ack":false,"producers":10,"retry_max_attempts":32,"same_path":false,"size":102400,"target_rate":null,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=8.0 MB/s=0.78 p50=nullus p99=nullus err=0
+["channel"] "avrora_runtime_inproc" "1P_1C_same_path" {"ack_batch":false,"ack_on_attempt":1,"consumers":1,"never_ack":false,"producers":1,"retry_max_attempts":32,"same_path":true,"size":102400,"target_rate":null,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=10.4 MB/s=1.02 p50=33522231.08us p99=37789277.25us err=0
+["channel"] "avrora_runtime_inproc" "1P_1C_ack_batch" {"ack_batch":true,"ack_on_attempt":1,"consumers":1,"never_ack":false,"producers":1,"retry_max_attempts":32,"same_path":false,"size":102400,"target_rate":null,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=10.33 MB/s=1.01 p50=33113226.46us p99=37158327.0us err=0
+["channel"] "avrora_runtime_inproc" "1P_1C_retry_ack_on_2nd" {"ack_batch":false,"ack_on_attempt":2,"consumers":1,"never_ack":false,"producers":1,"retry_max_attempts":32,"same_path":false,"size":102400,"target_rate":null,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=7.77 MB/s=0.76 p50=63902598.75us p99=70011400.71us err=0
+["channel"] "avrora_runtime_inproc" "1P_1C_dlq_max3" {"ack_batch":false,"ack_on_attempt":1,"consumers":1,"never_ack":true,"producers":1,"retry_max_attempts":3,"same_path":false,"size":102400,"target_rate":null,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=3.3 MB/s=0.32 p50=78262785.5us p99=130032198.75us err=0
+["channel"] "avrora_runtime_inproc" "backpressure_inflight_probe"  ops/s=null MB/s=null p50=nullus p99=nullus err=null
+== channel_100KB exit=0 elapsed=854s
+== trigger: --warmup 5 --measure 30 trigger --size 1024
+["trigger"] "avrora_runtime_inproc" "0_triggers_1_writers" {"size":1024,"timing":{"measure_s":30.0,"warmup_s":5.0},"triggers":0,"writers":1} ops/s=79.63 MB/s=0.08 p50=12931.92us p99=14123.54us err=0
+["trigger"] "avrora_runtime_inproc" "1_triggers_1_writers" {"size":1024,"timing":{"measure_s":30.0,"warmup_s":5.0},"triggers":1,"writers":1} ops/s=81.6 MB/s=0.08 p50=12054.67us p99=14082.33us err=0
+["trigger"] "avrora_runtime_inproc" "5_triggers_1_writers" {"size":1024,"timing":{"measure_s":30.0,"warmup_s":5.0},"triggers":5,"writers":1} ops/s=79.93 MB/s=0.08 p50=12844.13us p99=15147.42us err=0
+["trigger"] "avrora_runtime_inproc" "0_triggers_8_writers" {"size":1024,"timing":{"measure_s":30.0,"warmup_s":5.0},"triggers":0,"writers":8} ops/s=81.17 MB/s=0.08 p50=99907.67us p99=113030.21us err=0
+["trigger"] "avrora_runtime_inproc" "1_triggers_8_writers" {"size":1024,"timing":{"measure_s":30.0,"warmup_s":5.0},"triggers":1,"writers":8} ops/s=79.73 MB/s=0.08 p50=100978.79us p99=109996.71us err=0
+["trigger"] "avrora_runtime_inproc" "5_triggers_8_writers" {"size":1024,"timing":{"measure_s":30.0,"warmup_s":5.0},"triggers":5,"writers":8} ops/s=80.6 MB/s=0.08 p50=99862.46us p99=109003.21us err=0
+== trigger exit=0 elapsed=215s
+== conn_avrora: --warmup 5 --measure 15 connections --steps 10,50,100,250,500,1000,2500,5000,10000,15000
+["connections"] "avrora_control_tls13_mtls" "ramp_step" {"connections":10,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=95216.93 MB/s=null p50=102.83us p99=179.17us err=0
+["connections"] "avrora_control_tls13_mtls" "ramp_step" {"connections":50,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=99025.27 MB/s=null p50=502.54us p99=627.88us err=0
+["connections"] "avrora_control_tls13_mtls" "ramp_step" {"connections":100,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=99279.47 MB/s=null p50=1004.21us p99=1170.83us err=0
+["connections"] "avrora_control_tls13_mtls" "ramp_step" {"connections":250,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=99122.87 MB/s=null p50=2507.25us p99=3006.88us err=0
+["connections"] "avrora_control_tls13_mtls" "ramp_step" {"connections":500,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=97930.4 MB/s=null p50=5083.21us p99=5681.88us err=0
+["connections"] "avrora_control_tls13_mtls" "ramp_step" {"connections":1000,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=94262.27 MB/s=null p50=10576.25us p99=11480.38us err=0
+["connections"] "avrora_control_tls13_mtls" "ramp_step" {"connections":2500,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=91980.67 MB/s=null p50=26990.0us p99=31125.46us err=0
+["connections"] "avrora_control_tls13_mtls" "ramp_step" {"connections":5000,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=91499.73 MB/s=null p50=54364.25us p99=61764.13us err=0
+["connections"] "avrora_control_tls13_mtls" "ramp_step" {"connections":10000,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=88711.93 MB/s=null p50=111331.21us p99=129714.67us err=0
+["connections"] "avrora_control_tls13_mtls" "ramp_step" {"connections":15000,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=88275.07 MB/s=null p50=168097.38us p99=208224.38us err=0
+== conn_avrora exit=0 elapsed=387s
+== conn_pg: --warmup 5 --measure 15 pg --connections --max-conns 1000
+["connections"] "postgres_default_tcp" "ramp_step" {"connections":10,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=164487.8 MB/s=null p50=58.29us p99=129.58us err=0
+["connections"] "postgres_default_tcp" "ramp_step" {"connections":50,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=204715.73 MB/s=null p50=226.75us p99=658.92us err=0
+["connections"] "postgres_default_tcp" "ramp_step" {"connections":100,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=202788.6 MB/s=null p50=467.54us p99=1325.38us err=0
+["connections"] "postgres_default_tcp" "ramp_step" {"connections":250,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=186592.8 MB/s=null p50=1163.5us p99=4449.58us err=0
+["connections"] "postgres_default_tcp" "ramp_step" {"connections":500,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=171248.0 MB/s=null p50=2244.29us p99=13508.33us err=0
+["connections"] "postgres_default_tcp" "ramp_step" {"connections":1000,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=155548.4 MB/s=null p50=4841.42us p99=32736.63us err=0
+== conn_pg exit=0 elapsed=167s
+== csv: csv
+== csv exit=0 elapsed=0s
+== done: bench-results/v1/run-20261003

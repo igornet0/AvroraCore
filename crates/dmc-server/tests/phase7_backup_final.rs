@@ -6,6 +6,7 @@
 
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 use dmc_backup::{live_paths, RecoveryGate, RecoveryState};
 use dmc_materialized::StateMaterializer;
@@ -248,9 +249,15 @@ fn grant_analyst(auth: &mut AuthService) {
 }
 
 /// Open a recovered restore target as a fresh Locked Core (Auth + UnlockGate independent of live).
-fn open_recovered_core(target: &Path) -> (CoreServerState, UnlockMaterial) {
+/// D4-F: the recovered tree is sealed with the live installation's storage keys (`cipher`).
+fn open_recovered_core(
+    target: &Path,
+    cipher: &Arc<dmc_vault::StorageCipher>,
+) -> (CoreServerState, UnlockMaterial) {
     let (rows, snapshot, log) = live_paths(target);
-    let mat = StateMaterializer::open_recovered(rows, snapshot, log).unwrap();
+    let mat =
+        StateMaterializer::open_recovered_with_cipher(rows, snapshot, log, Some(cipher.clone()))
+            .unwrap();
     let catalog = mat.catalog.clone();
     let mut ctx = ExecutionContext::new();
     ctx.attach_journal(JournalBackend::File(mat));
@@ -295,6 +302,7 @@ fn dod_snapshot_restore_auth_unlock_sql() {
     grant_users_dml(&mut live);
     let (sid, binding) = auth_pair(&mut live, 1);
     unlock(&mut live, 2, &sid, &binding, &master);
+    let live_cipher = Arc::new(live.unlock_gate.storage_cipher().unwrap());
 
     sql_ok(
         &mut live,
@@ -456,7 +464,7 @@ fn dod_snapshot_restore_auth_unlock_sql() {
         RecoveryState::Ready
     );
 
-    let (mut recovered_core, rec_master) = open_recovered_core(&target);
+    let (mut recovered_core, rec_master) = open_recovered_core(&target, &live_cipher);
     let (rsid, rbinding) = auth_pair(&mut recovered_core, 100);
 
     // SQL denied until unlock (7.6).
@@ -490,7 +498,7 @@ fn dod_snapshot_restore_auth_unlock_sql() {
     ))
     .unwrap();
 
-    let (mut recovered2, master2) = open_recovered_core(&target);
+    let (mut recovered2, master2) = open_recovered_core(&target, &live_cipher);
     let (sid2, bind2) = auth_pair(&mut recovered2, 200);
     unlock(&mut recovered2, 201, &sid2, &bind2, &master2);
     let rows2 = sql_rows(
@@ -656,8 +664,9 @@ fn atomicity_invalid_components_leave_live_and_target_untouched() {
 #[test]
 fn failed_recovery_never_ready() {
     let dir = tempdir().unwrap();
-    let (mut state, _master) = bootstrap_core_state_locked(dir.path(), true);
-    let (sid, _) = auth_pair(&mut state, 1);
+    let (mut state, master) = bootstrap_core_state_locked(dir.path(), true);
+    let (sid, binding) = auth_pair(&mut state, 1);
+    unlock(&mut state, 100, &sid, &binding, &master); // D4-F: backups need open storage
     expect_ok_control(control(
         &mut state,
         2,
@@ -705,8 +714,9 @@ fn failed_recovery_never_ready() {
 #[test]
 fn recover_is_idempotent_under_control_plane() {
     let dir = tempdir().unwrap();
-    let (mut state, _master) = bootstrap_core_state_locked(dir.path(), true);
-    let (sid, _) = auth_pair(&mut state, 1);
+    let (mut state, master) = bootstrap_core_state_locked(dir.path(), true);
+    let (sid, binding) = auth_pair(&mut state, 1);
+    unlock(&mut state, 100, &sid, &binding, &master); // D4-F: backups need open storage
     expect_ok_control(control(
         &mut state,
         2,

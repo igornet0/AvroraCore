@@ -337,7 +337,7 @@ fn vault_lock_unlock_lifecycle() {
     )
     .unwrap();
     match expect_ok_control(status).unwrap() {
-        ControlResponse::VaultStatus { state: st } => assert_eq!(st, VaultStateWire::Locked),
+        ControlResponse::VaultStatus { state: st, .. } => assert_eq!(st, VaultStateWire::Locked),
         other => panic!("{other:?}"),
     }
 

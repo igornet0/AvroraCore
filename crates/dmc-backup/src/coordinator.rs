@@ -15,6 +15,7 @@ use crate::manifest::{
     VaultMetadataSummary, BACKUP_MANIFEST_FORMAT_VERSION,
 };
 use crate::publish::{publish_staged, PublishedBackup, StagedBackup, STAGE_DIR_PREFIX};
+use crate::registry::{manifest_sealed_hash, BackupRegistry, RegistryEntry};
 use crate::source::BackupSource;
 use crate::vault_meta;
 use crate::writer::{BackupWriter, DefaultBackupWriter};
@@ -27,6 +28,11 @@ pub struct BackupRequest {
     pub vault: VaultMetadataSummary,
     /// Override wall-clock; when `None`, a UTC unix-epoch timestamp string is used.
     pub created_at: Option<String>,
+    /// Optional `ownership/` directory (CLIENT_OWNED key directory) to carry along.
+    pub ownership_dir: Option<std::path::PathBuf>,
+    /// D4-E: the installation's key store (`vault/keytree.json`, wrapped keys only) to
+    /// carry along in an encrypted backup.
+    pub key_store: Option<std::path::PathBuf>,
 }
 
 impl BackupRequest {
@@ -36,7 +42,21 @@ impl BackupRequest {
             options: BackupOptions::default(),
             vault: vault_meta::absent(),
             created_at: None,
+            ownership_dir: None,
+            key_store: None,
         }
+    }
+
+    /// Include the CLIENT_OWNED key directory (and the store's sealed-column rules).
+    pub fn with_ownership_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.ownership_dir = Some(dir.into());
+        self
+    }
+
+    /// D4-E: carry the installation's key store (encrypted backups only).
+    pub fn with_key_store(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.key_store = Some(path.into());
+        self
     }
 
     pub fn with_vault(mut self, vault: VaultMetadataSummary) -> Self {
@@ -147,6 +167,9 @@ impl BackupCoordinator {
             options: request.options.clone(),
             created_at,
             files: Vec::new(),
+            encrypted: false,
+            backup_id: String::new(),
+            registry_generation: 0,
         };
 
         validate_manifest_invariants(&manifest)?;
@@ -167,8 +190,23 @@ impl BackupCoordinator {
         backups_root: &Path,
         backup_id: &str,
     ) -> Result<PublishedBackup> {
+        // D4-C order: data → authenticated manifest (staged) → publish → registry entry.
+        // A backup published without its registry entry is never accepted.
         let staged = Self::stage_artifact(mat, request, backups_root, backup_id)?;
-        publish_staged(&staged)
+        let published = publish_staged(&staged)?;
+        if let Some(c) = mat.storage_cipher() {
+            let mut registry = BackupRegistry::load(mat.storage_root(), c)?;
+            registry.register(
+                backup_id,
+                RegistryEntry {
+                    generation: published.manifest.registry_generation,
+                    manifest_sealed_sha256: manifest_sealed_hash(&published.path)?,
+                    checkpoint_sequence: published.manifest.checkpoint_sequence,
+                },
+            );
+            registry.save(mat.storage_root(), c)?;
+        }
+        Ok(published)
     }
 
     /// Materialize full artifact under staging (does not publish).
@@ -178,8 +216,15 @@ impl BackupCoordinator {
         backups_root: &Path,
         backup_id: &str,
     ) -> Result<StagedBackup> {
-        let manifest = Self::build_manifest(mat, request)?;
-        let source = BackupSource::from_log(mat.event_log());
+        let mut manifest = Self::build_manifest(mat, request)?;
+        // D4-C: the registry generation goes into the authenticated manifest.
+        if let Some(c) = mat.storage_cipher() {
+            manifest.registry_generation =
+                BackupRegistry::load(mat.storage_root(), c)?.next_generation();
+        }
+        // D4-A: a store opened with storage keys produces an encrypted artifact.
+        let source = BackupSource::from_log(mat.event_log())
+            .with_cipher(mat.storage_cipher().cloned());
         let staging_dir = backups_root
             .join(".staging")
             .join(format!("{STAGE_DIR_PREFIX}{backup_id}"));
@@ -188,11 +233,28 @@ impl BackupCoordinator {
             return Err(BackupError::AlreadyExists);
         }
         let artifact = DefaultBackupWriter.write(&manifest, &source, &staging_dir)?;
+        let manifest = crate::ownership::attach(
+            &artifact.root,
+            artifact.manifest,
+            request.ownership_dir.as_deref(),
+            mat.sealed_columns(),
+            mat.storage_cipher().map(|c| c.as_ref()),
+        )?;
+        let manifest = crate::keystore::attach(
+            &artifact.root,
+            manifest,
+            request.key_store.as_deref(),
+            mat.storage_cipher().map(|c| c.as_ref()),
+        )?;
+        // With keys: the complete staged artifact must pass the authenticated verification.
+        if let Some(c) = mat.storage_cipher() {
+            crate::verify::verify_backup_with(&artifact.root, Some(c))?.ensure_valid()?;
+        }
         Ok(StagedBackup {
             backup_id: backup_id.to_string(),
             staging_dir: artifact.root,
             publish_dir,
-            manifest: artifact.manifest,
+            manifest,
         })
     }
 

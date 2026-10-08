@@ -4,7 +4,8 @@
 #   make -f Makefile.docker up          # production-like (random secrets)
 #   make -f Makefile.docker up-dev      # DEV: fixed secrets from docker/env.dev
 #
-# Requires: Docker Engine + Compose v2 (build additional_contexts) + sibling ../AvroraClient
+# Requires: Docker Engine + Compose v2 (build additional_contexts) + siblings
+# ../AvroraClient and ../BackupSAS
 # Run from the AvroraCore directory (paths with spaces break make's $(lastword)).
 
 # Do not use $(lastword $(MAKEFILE_LIST)) — absolute -f paths with spaces are split.
@@ -29,7 +30,8 @@ export RUST_VERSION NODE_VERSION INVITE_HOST INVITE_PORT
 .PHONY: help build rebuild up down stop start restart ps status logs \
 	logs-avrora logs-sql shell shell-sql invite init status-avrora \
 	up-dev down-dev restart-dev logs-dev ps-dev credentials destroy-dev \
-	invite-dev init-dev pull clean destroy
+	invite-dev init-dev pull clean destroy check-siblings \
+	e2e-backupsas e2e-backupsas-up e2e-backupsas-down
 
 help:
 	@echo "AvroraCore Docker (СУБД)"
@@ -47,6 +49,11 @@ help:
 	@echo "    make -f Makefile.docker down-dev"
 	@echo "    make -f Makefile.docker destroy-dev   Wipe volume avrora-core-dev-data"
 	@echo ""
+	@echo "  BackupSAS E2E (avrora + 2 BackupSAS nodes, see docker/e2e/README.md):"
+	@echo "    make -f Makefile.docker e2e-backupsas       Build, run checks, tear down"
+	@echo "    make -f Makefile.docker e2e-backupsas-up    Build + start stand only"
+	@echo "    make -f Makefile.docker e2e-backupsas-down  Stop stand, wipe its volumes"
+	@echo ""
 	@echo "  Shared:"
 	@echo "    make -f Makefile.docker build       Build image $(IMAGE)"
 	@echo "    make -f Makefile.docker shell       Shell in avrora (prod compose)"
@@ -59,18 +66,18 @@ help:
 	@echo "DEV login: see docker/env.dev (Access Key + TOTP)."
 	@echo "  oathtool --totp -b \$$(grep AVRORA_UI_TOTP_SECRET docker/env.dev | cut -d= -f2)"
 
-build:
-	@test -d "$(ROOT)/../AvroraClient" || { \
-		echo "missing sibling AvroraClient at $(ROOT)/../AvroraClient" >&2; \
-		exit 1; \
-	}
+check-siblings:
+	@for d in AvroraClient BackupSAS; do \
+		test -d "$(ROOT)/../$$d" || { \
+			echo "missing sibling $$d at $(ROOT)/../$$d" >&2; \
+			exit 1; \
+		}; \
+	done
+
+build: check-siblings
 	$(DOCKER_COMPOSE) build
 
-rebuild:
-	@test -d "$(ROOT)/../AvroraClient" || { \
-		echo "missing sibling AvroraClient at $(ROOT)/../AvroraClient" >&2; \
-		exit 1; \
-	}
+rebuild: check-siblings
 	$(DOCKER_COMPOSE) build --no-cache
 
 up: build
@@ -164,6 +171,15 @@ clean: down
 destroy: clean
 	-docker volume rm avrora-core-data 2>/dev/null || true
 	@echo "volume avrora-core-data removed (if present)"
+
+e2e-backupsas: check-siblings
+	"$(ROOT)/docker/e2e/run.sh"
+
+e2e-backupsas-up: check-siblings
+	KEEP=1 NO_TEST=1 "$(ROOT)/docker/e2e/run.sh"
+
+e2e-backupsas-down:
+	docker compose -f "$(ROOT)/docker/e2e/compose.yml" down -v
 
 destroy-dev: down-dev
 	-docker volume rm avrora-core-dev-data 2>/dev/null || true

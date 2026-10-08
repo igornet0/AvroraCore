@@ -9,6 +9,8 @@ path = "src/bin/avrora.rs"
 
 [dependencies]
 avrora-proto = { path = "../../../AvroraClient/crates/avrora-proto" }
+backupsas-client = { path = "../../../BackupSAS/crates/backupsas-client" }
+backupsas-core = { path = "../../../BackupSAS/crates/backupsas-core" }
 axum = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive"] }
@@ -41,6 +43,9 @@ x509-parser = "0.17"
 zeroize = "1"
 
 [dev-dependencies]
+backupsas-server = { path = "../../../BackupSAS/crates/backupsas-server" }
+dmc-client-crypto = { path = "../dmc-client-crypto" }
+backupsas-storage = { path = "../../../BackupSAS/crates/backupsas-storage" }
 avrora-client = { path = "../../../AvroraClient/crates/avrora-client" }
 tempfile = "3"
 totp-rs = { version = "6.0.0", features = ["otpauth", "gen_secret"] }

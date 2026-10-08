@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::codec::{decode_segment_footer, decode_segment_header, scan_segment};
 use crate::error::{Error, Result};
@@ -12,6 +12,9 @@ use crate::types::SEGMENT_HEADER_LEN;
 
 struct SegmentSpan {
     id: u64,
+    /// Directory holding the segment (one per partition). Sequence ranges of different
+    /// partitions interleave, so overlap only means "compaction orphan" within one directory.
+    dir: PathBuf,
     start_sequence: u64,
     end_sequence: u64,
     is_active: bool,
@@ -38,6 +41,7 @@ fn load_segment_span(
     let end_sequence = footer.map(|(last, _)| last).unwrap_or(last_seq);
     Ok(Some(SegmentSpan {
         id,
+        dir: path.parent().map(Path::to_path_buf).unwrap_or_default(),
         start_sequence: header.first_sequence,
         end_sequence,
         is_active,
@@ -51,7 +55,7 @@ fn overlaps(a: &SegmentSpan, b: &SegmentSpan) -> bool {
 fn verify_legacy_topology_unambiguous(spans: &[SegmentSpan]) -> Result<()> {
     for i in 0..spans.len() {
         for j in (i + 1)..spans.len() {
-            if overlaps(&spans[i], &spans[j]) {
+            if spans[i].dir == spans[j].dir && overlaps(&spans[i], &spans[j]) {
                 return Err(Error::JournalManifestInconsistent(
                     "legacy journal topology ambiguous: overlapping segment ranges".into(),
                 ));
@@ -76,20 +80,19 @@ pub fn legacy_authoritative_segment_ids(
     spans.sort_by_key(|s| s.id);
 
     let mut authoritative = Vec::new();
-    let mut covered: Vec<(u64, u64)> = Vec::new();
+    let mut covered: Vec<(PathBuf, u64, u64)> = Vec::new();
     for span in spans {
         if span.is_active {
             authoritative.push(span.id);
             continue;
         }
-        if covered
-            .iter()
-            .any(|(start, end)| span.start_sequence <= *end && span.end_sequence >= *start)
-        {
+        if covered.iter().any(|(dir, start, end)| {
+            *dir == span.dir && span.start_sequence <= *end && span.end_sequence >= *start
+        }) {
             continue;
         }
         authoritative.push(span.id);
-        covered.push((span.start_sequence, span.end_sequence));
+        covered.push((span.dir, span.start_sequence, span.end_sequence));
     }
     Ok(authoritative)
 }
@@ -130,22 +133,26 @@ pub fn legacy_topology_unambiguous(journal_dir: &Path, active_segments: &[u64]) 
 mod unit {
     use super::*;
 
+    fn span(id: u64, dir: &str, start: u64, end: u64) -> SegmentSpan {
+        SegmentSpan {
+            id,
+            dir: PathBuf::from(dir),
+            start_sequence: start,
+            end_sequence: end,
+            is_active: false,
+        }
+    }
+
     #[test]
     fn legacy_rejects_overlapping_ranges() {
-        let spans = vec![
-            SegmentSpan {
-                id: 1,
-                start_sequence: 1,
-                end_sequence: 100,
-                is_active: false,
-            },
-            SegmentSpan {
-                id: 5,
-                start_sequence: 1,
-                end_sequence: 300,
-                is_active: false,
-            },
-        ];
+        let spans = vec![span(1, "j", 1, 100), span(5, "j", 1, 300)];
         assert!(verify_legacy_topology_unambiguous(&spans).is_err());
+    }
+
+    #[test]
+    fn overlapping_ranges_in_different_partitions_are_unambiguous() {
+        // Interleaved partitions: p-0 holds 1,4,7…; p-1 holds 2,5,8… — ranges overlap by design.
+        let spans = vec![span(1, "j/p-0", 1, 28), span(2, "j/p-1", 2, 29)];
+        assert!(verify_legacy_topology_unambiguous(&spans).is_ok());
     }
 }

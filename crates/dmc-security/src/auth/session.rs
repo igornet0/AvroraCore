@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use dmc_vault::ownership::SubjectId;
+
 use crate::auth::identity::IdentityId;
 use crate::auth::principal::AuthPrincipal;
 use crate::identity::{now_unix_ms, SessionId, DEFAULT_SESSION_TTL_MS};
@@ -14,7 +16,7 @@ pub enum SessionState {
     Revoked,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AuthSession {
     pub id: SessionId,
     pub identity_id: IdentityId,
@@ -23,6 +25,36 @@ pub struct AuthSession {
     pub state: SessionState,
     /// Per-session AEAD key for UnlockBlob (never Master Key).
     pub unlock_binding_key: [u8; 32],
+    /// Transport channel the session is bound to (D5): a DMC/control connection id or an
+    /// HTTP signing channel. `None` only for sessions created outside any request
+    /// (in-process); such sessions are refused inside network requests.
+    pub channel: Option<String>,
+    /// CLIENT_OWNED subject proven by Ed25519 authentication (None for password sessions).
+    pub subject: Option<SubjectId>,
+    /// Auth key version used to authenticate (CLIENT_OWNED sessions).
+    pub auth_key_version: Option<u32>,
+}
+
+/// Session binding key is wiped when the session record is dropped.
+impl Drop for AuthSession {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.unlock_binding_key);
+    }
+}
+
+impl std::fmt::Debug for AuthSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthSession")
+            .field("id", &self.id)
+            .field("identity_id", &self.identity_id)
+            .field("created_at_ms", &self.created_at_ms)
+            .field("expires_at_ms", &self.expires_at_ms)
+            .field("state", &self.state)
+            .field("channel", &self.channel)
+            .field("subject", &self.subject)
+            .field("unlock_binding_key", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl AuthSession {
@@ -50,6 +82,30 @@ pub struct InMemorySessionStore {
 }
 
 impl InMemorySessionStore {
+    /// Revoke every session bound to `channel` (the connection closed; there is no rebind).
+    pub fn revoke_channel_sessions(&mut self, channel: &str) -> usize {
+        let mut revoked = 0usize;
+        for session in self.sessions.values_mut() {
+            if session.channel.as_deref() == Some(channel) && !matches!(session.state, SessionState::Revoked) {
+                session.state = SessionState::Revoked;
+                revoked += 1;
+            }
+        }
+        revoked
+    }
+
+    /// Revoke every live session of `identity_id` (used when the identity is disabled).
+    pub fn revoke_identity_sessions(&mut self, identity_id: &IdentityId) -> usize {
+        let mut revoked = 0usize;
+        for session in self.sessions.values_mut() {
+            if &session.identity_id == identity_id && !matches!(session.state, SessionState::Revoked) {
+                session.state = SessionState::Revoked;
+                revoked += 1;
+            }
+        }
+        revoked
+    }
+
     pub fn new() -> Self {
         Self {
             session_ttl_ms: DEFAULT_SESSION_TTL_MS,
@@ -72,7 +128,22 @@ impl InMemorySessionStore {
         self.clock_ms.unwrap_or_else(now_unix_ms)
     }
 
+    pub fn now_ms(&self) -> u64 {
+        self.now()
+    }
+
     pub fn insert(&mut self, identity_id: IdentityId) -> AuthSession {
+        self.insert_bound(identity_id, None, None, None)
+    }
+
+    /// Create a session bound to `channel` (and, for CLIENT_OWNED, to the proven subject).
+    pub fn insert_bound(
+        &mut self,
+        identity_id: IdentityId,
+        channel: Option<String>,
+        subject: Option<SubjectId>,
+        auth_key_version: Option<u32>,
+    ) -> AuthSession {
         let now = self.now();
         let mut unlock_binding_key = [0u8; 32];
         rand::fill(&mut unlock_binding_key);
@@ -83,6 +154,9 @@ impl InMemorySessionStore {
             expires_at_ms: now.saturating_add(self.session_ttl_ms),
             state: SessionState::Active,
             unlock_binding_key,
+            channel,
+            subject,
+            auth_key_version,
         };
         self.sessions
             .insert(session.id.as_str().to_string(), session.clone());
@@ -153,7 +227,7 @@ impl SessionManager for InMemorySessionStore {
 
     fn principal_for(&self, session_id: &SessionId) -> Result<AuthPrincipal> {
         let session = self.validate_session(session_id)?;
-        Ok(AuthPrincipal::new(session.identity_id, session.id))
+        Ok(AuthPrincipal::new(session.identity_id.clone(), session.id.clone()))
     }
 
     fn unlock_binding_key(&self, session_id: &SessionId) -> Result<[u8; 32]> {

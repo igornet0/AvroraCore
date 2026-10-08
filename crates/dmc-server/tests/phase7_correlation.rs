@@ -360,7 +360,7 @@ fn journal_sequence_only_after_append() {
 }
 
 #[test]
-fn disconnect_changes_connection_keeps_session_and_transaction() {
+fn disconnect_ends_session_and_rolls_back_transaction() {
     let dir = tempdir().unwrap();
     let (mut state, master) = bootstrap_core_state_locked(dir.path(), true);
     let sink = attach_memory(&mut state);
@@ -396,20 +396,34 @@ fn disconnect_changes_connection_keeps_session_and_transaction() {
     assert_eq!(insert_done.context.connection_id.as_deref(), Some(conn_a.as_str()));
     assert_eq!(insert_done.context.session_id.as_deref(), Some(sid.as_str()));
 
-    // "Disconnect" then reconnect: new connection_id, same Core state (session + txn survive).
+    // D5 + F8 (replaces "disconnect keeps session and transaction"): the session is bound
+    // to conn_a, so it cannot COMMIT from conn_b; when conn_a closes, its open transaction
+    // is rolled back (never committed) and the failure is still correlated.
     let conn_b = allocate_connection_id();
     assert_ne!(conn_a, conn_b);
     sink.clear();
-    commit(&mut state, 6, &conn_b, &sid);
+    let resp = handle_data(
+        &mut state,
+        RequestEnvelope {
+            request_id: 6,
+            body: DataRequest::Commit {
+                session_id: sid.clone(),
+            },
+        },
+        &limits(),
+        &conn_b,
+    )
+    .unwrap();
+    assert_eq!(resp.error_code, Some(dmc_protocol::ProtocolErrorCode::SessionInvalid));
+    assert!(state.has_active_transaction(), "not committed by a foreign connection");
+    assert!(events_of(&sink, EventKind::SqlCompleted)
+        .iter()
+        .all(|e| e.context.request_id.as_deref() != Some("6")));
+    let _ = txn;
 
-    let commit_done = events_of(&sink, EventKind::SqlCompleted)
-        .into_iter()
-        .find(|e| e.context.request_id.as_deref() == Some("6"))
-        .unwrap();
-    assert_eq!(commit_done.context.connection_id.as_deref(), Some(conn_b.as_str()));
-    assert_eq!(commit_done.context.session_id.as_deref(), Some(sid.as_str()));
-    assert_eq!(commit_done.context.transaction_id.as_deref(), Some(txn.as_str()));
-    assert!(commit_done.context.journal_sequence.is_some());
+    state.auth.close_channel(&conn_a);
+    state.reap_orphan_transaction();
+    assert!(!state.has_active_transaction(), "orphan transaction rolled back");
 }
 
 #[test]

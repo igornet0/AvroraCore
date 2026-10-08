@@ -8,6 +8,10 @@ description = "Benchmarks and stress tests for DataModelCore (Avrora)"
 name = "avrora-stress"
 path = "src/bin/stress.rs"
 
+[[bin]]
+name = "avrora-bench-v1"
+path = "src/bin/bench_v1/main.rs"
+
 [[bench]]
 name = "runtime_bench"
 harness = false
@@ -23,6 +27,22 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
+# Benchmark V1 harness (benchmark infrastructure only)
+avrora-client = { path = "../../../AvroraClient/crates/avrora-client" }
+avrora-proto = { path = "../../../AvroraClient/crates/avrora-proto" }
+dmc-client = { path = "../dmc-client" }
+dmc-ipc = { path = "../dmc-ipc" }
+dmc-protocol = { path = "../dmc-protocol" }
+dmc-security = { path = "../dmc-security" }
+dmc-server = { path = "../dmc-server" }
+hex = "0.4"
+libc = "0.2"
+rand = "0.8"
+rcgen = { version = "0.14", features = ["x509-parser"] }
+rustls = { version = "0.23", features = ["ring"] }
+tokio-postgres = "0.7"
+tokio-rustls = "0.26"
+totp-rs = { version = "6.0.0", features = ["otpauth"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }

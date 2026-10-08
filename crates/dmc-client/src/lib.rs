@@ -6,7 +6,7 @@
 mod client;
 mod control;
 mod error;
-mod keypass;
+pub mod keypass;
 mod runtime;
 mod session;
 mod sql;
@@ -14,7 +14,7 @@ mod transport;
 mod types;
 
 pub use client::Client;
-pub use control::ControlClient;
+pub use control::{ControlClient, IssuedInviteWire};
 pub use error::{ClientError, Result};
 pub use keypass::KeyPassHandle;
 pub use session::{ConnectionPhase, SessionSnapshot};

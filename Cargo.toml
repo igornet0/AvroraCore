@@ -4,6 +4,7 @@ members = [
     "crates/dmc-core",
     "crates/dmc-security",
     "crates/dmc-vault",
+    "crates/dmc-client-crypto",
     "crates/dmc-journal",
     "crates/dmc-storage",
     "crates/dmc-sql",
@@ -21,6 +22,7 @@ members = [
     "crates/dmc-ddl",
     "crates/dmc-server",
     "crates/dmc-ipc",
+    "crates/dmc-http-co",
     "crates/dmc-remote",
     "crates/dmc-client",
     "crates/dmc-tauri",
@@ -34,7 +36,7 @@ members = [
 
 [workspace.package]
 name = "avrora-core"
-version = "0.0.2"
+version = "0.1.1"
 edition = "2024"
 description = "Avrora Core — ядро высокопроизводительной СУБД с поддержкой транзакций, расширяемости и современных SQL-функций."
 license = "MIT"
@@ -43,3 +45,10 @@ repository = "https://github.com/igornet0/AvroraCore"
 keywords = ["database", "sql", "transaction", "core", "storage", "avrora"]
 categories = ["database-implementations", "data-structures", "storage"]
 
+
+# Argon2id is far too slow unoptimised; keep debug/test builds usable.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

@@ -10,11 +10,13 @@
 //! * 7.10.8 — failure policy classifier (RejectOnly / NotReady / Fatal)
 
 mod config;
+mod emergency;
 mod error;
 mod failure;
 mod layout;
 mod lifecycle;
 mod limits;
+mod migrate;
 mod parse;
 mod secrets;
 mod shutdown;
@@ -47,6 +49,7 @@ pub use limits::{
     assert_limit_error_clean, validate_limits_config, ConnectionLimitGroup, LimitPolicySnapshot,
     ProtocolLimitGroup, RequestLimitGroup, RuntimeLimitPolicy, SqlLimitGroup,
 };
+pub use emergency::{stage_emergency_restore, EmergencyStage};
 pub use parse::{load_config_file, parse_config_json, parse_config_str, parse_config_toml};
 pub use secrets::{assert_no_secrets_in_config, assert_no_secrets_in_text, FORBIDDEN_CONFIG_KEYS};
 pub use shutdown::{
@@ -55,6 +58,7 @@ pub use shutdown::{
 };
 pub use startup::{
     assert_started_invariants, assert_startup_error_clean, start_core, StartedCore,
+    ENCRYPTED_STORAGE_MARKER,
     StartupDiagnostics, StartupOptions,
 };
 pub use validate::validate_config;

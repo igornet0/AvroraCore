@@ -3,6 +3,7 @@ use dmc_model::{RowId, RowValue, TableId};
 use crate::codec::StoredValue;
 use crate::error::{Error, Result};
 use crate::manifest::{schema_from_catalog_columns, table_dir, StorageManifest};
+use crate::segment::DEFAULT_MAX_SEGMENT_BYTES;
 use crate::table_store::TableStore;
 
 pub fn row_values_to_stored(values: &[RowValue]) -> Vec<StoredValue> {
@@ -119,12 +120,22 @@ pub fn ensure_table_store(
     table_id: TableId,
     columns: &[(dmc_model::ColumnId, dmc_model::SqlDataType, bool)],
 ) -> Result<TableStore> {
+    ensure_table_store_with(root, table_id, columns, None)
+}
+
+/// [`ensure_table_store`] with sealed row segments when `cipher` is given (D4-A).
+pub fn ensure_table_store_with(
+    root: &std::path::Path,
+    table_id: TableId,
+    columns: &[(dmc_model::ColumnId, dmc_model::SqlDataType, bool)],
+    cipher: Option<std::sync::Arc<dmc_vault::StorageCipher>>,
+) -> Result<TableStore> {
     let table_root = table_dir(root, table_id);
     if table_root.join("manifest.json").exists() {
-        TableStore::open(root, table_id)
+        TableStore::open_with_cipher(root, table_id, DEFAULT_MAX_SEGMENT_BYTES, cipher)
     } else {
         let schema = schema_from_catalog_columns(table_id, columns);
-        TableStore::create(root, table_id, schema)
+        TableStore::create_with_cipher(root, table_id, schema, DEFAULT_MAX_SEGMENT_BYTES, cipher)
     }
 }
 

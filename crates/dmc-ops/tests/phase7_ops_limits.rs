@@ -272,7 +272,8 @@ fn sql_size_limit_does_not_touch_journal_or_vault() {
     let mut cfg = cfg_for(&dir.path().join("data"));
     cfg.limits.max_sql_size = 16;
     let mut started = start_core(cfg, StartupOptions::production()).unwrap();
-    let tip = started.server.ctx.journal().unwrap().tip_sequence();
+    // D4-A: storage is not even opened before unlock
+    assert!(started.server.storage_sealed());
     let limits = started.limits.to_remote_limits();
 
     let resp = handle_data(
@@ -291,10 +292,7 @@ fn sql_size_limit_does_not_touch_journal_or_vault() {
     .unwrap();
     assert_eq!(resp.status, ResponseStatus::Error);
     assert_eq!(resp.error_code, Some(ProtocolErrorCode::InvalidRequest));
-    assert_eq!(
-        started.server.ctx.journal().unwrap().tip_sequence(),
-        tip
-    );
+    assert!(started.server.storage_sealed(), "the rejected request did not open storage");
     assert!(started.vault_locked());
     assert_eq!(
         started.server.operational.lifecycle,

@@ -44,7 +44,37 @@ pub fn validate_control_request(body: &ControlRequest, limits: &RemoteLimits) ->
             }
             validate_unlock_blob(blob, limits.max_unlock_blob_size)?;
         }
-        ControlRequest::VaultStatus { session_id }
+        ControlRequest::StorageMigrateEncrypt {
+            blob, session_id, ..
+        } => {
+            if session_id.is_empty() {
+                return Err(ProtocolError::wire(
+                    ProtocolErrorCode::InvalidRequest,
+                    "missing session id",
+                ));
+            }
+            if blob.session_id != *session_id {
+                return Err(ProtocolError::wire(
+                    ProtocolErrorCode::UnlockSessionMismatch,
+                    "unlock blob session mismatch",
+                ));
+            }
+            validate_unlock_blob(blob, limits.max_unlock_blob_size)?;
+        }
+        ControlRequest::ClientKeyRegister { session_id, .. }
+        | ControlRequest::ClientKeyGet { session_id, .. }
+        | ControlRequest::ClientKeyRotate { session_id, .. }
+        | ControlRequest::KeyEnvelopePut { session_id, .. }
+        | ControlRequest::KeyEnvelopeGet { session_id }
+        | ControlRequest::GrantCreate { session_id, .. }
+        | ControlRequest::GrantList { session_id }
+        | ControlRequest::GrantRevoke { session_id, .. }
+        | ControlRequest::SealedColumnDeclare { session_id, .. }
+        | ControlRequest::IdentityInviteCreate { session_id, .. }
+        | ControlRequest::PrivilegeGrant { session_id, .. }
+        | ControlRequest::PrivilegeRevoke { session_id, .. }
+        | ControlRequest::PrivilegeList { session_id, .. }
+        | ControlRequest::VaultStatus { session_id }
         | ControlRequest::VaultLock { session_id }
         | ControlRequest::Logout { session_id }
         | ControlRequest::BackupCreate { session_id, .. }
@@ -94,6 +124,17 @@ pub fn validate_control_request(body: &ControlRequest, limits: &RemoteLimits) ->
         ControlRequest::GetCapabilities | ControlRequest::Health | ControlRequest::Readiness
         | ControlRequest::Diagnostics | ControlRequest::Authenticate { .. }
         | ControlRequest::SessionInfo { .. } => {}
+        ControlRequest::IdentityEnroll { token, signature, .. } => {
+            if token.len() != 32 || signature.len() != 64 {
+                return Err(ProtocolError::wire(ProtocolErrorCode::InvalidRequest, "malformed enrollment"));
+            }
+        }
+        ControlRequest::ClientAuthBegin { .. } => {}
+        ControlRequest::ClientAuthFinish { nonce, signature } => {
+            if nonce.len() != 32 || signature.len() != 64 {
+                return Err(ProtocolError::wire(ProtocolErrorCode::InvalidRequest, "malformed authentication"));
+            }
+        }
     }
     validate_runtime_fields(body, limits)
 }

@@ -223,6 +223,8 @@ impl From<dmc_security::Error> for Error {
             dmc_security::Error::Conflict(s) => Self::Invalid(s),
             dmc_security::Error::Vault(v) => Self::from_vault(v),
             dmc_security::Error::Auth(a) => Self::Invalid(a.to_string()),
+            dmc_security::Error::KeyAccessDenied(s) => Self::AuthorizationDenied(s),
+            dmc_security::Error::Ownership(e) => Self::AuthorizationDenied(e.to_string()),
         }
     }
 }

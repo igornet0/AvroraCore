@@ -82,6 +82,17 @@ impl JournalBackend {
         self.mutate_catalog(event)
     }
 
+    /// Declare a CLIENT_OWNED BLOB column (see `dmc_materialized::protect`).
+    pub fn declare_sealed_column(
+        &mut self,
+        rule: dmc_materialized::protect::SealedColumnRule,
+    ) -> std::result::Result<(), dmc_model::Error> {
+        match self {
+            Self::Memory(m) => m.declare_sealed_column(rule),
+            Self::File(m) => m.declare_sealed_column(rule),
+        }
+    }
+
     pub fn snapshot_sequence(&self) -> SnapshotSequence {
         match self {
             Self::Memory(m) => m.snapshot_sequence(),

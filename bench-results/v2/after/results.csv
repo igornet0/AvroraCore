@@ -1,0 +1,13 @@
+suite,system,scenario,params,ops,duration_s,ops_per_s,mb_per_s,p50_us,p95_us,p99_us,max_us,errors,cpu_pct,peak_rss_mb,disk_write_mb,disk_read_mb
+storage,avrora_kv_inproc,write_scaling_vs_keys,"{'size':'1KB','window':1000}",,,,,,,,,,,,,
+storage,avrora_kv_inproc,preload_sequential,"{'rows':10000,'size':'1KB'}",10000,37.17,269.06,0.26,,,,,0,8.14,34.78,185.3,0.09
+storage,avrora_kv_inproc,write,"{'batch':1,'dataset_rows':10000,'size':'1KB','timing':{'measure_s':20.0,'warmup_s':3.0},'workers':1}",5287,20.0,264.35,0.26,3859.71,4815.38,6198.63,430615.5,0,8.54,35.13,115.95,0.13
+storage,avrora_kv_inproc,data_dir_total,"{'size':'1KB'}",,,,,,,,,,,,,
+storage,avrora_kv_inproc,preload_sequential,"{'rows':10000,'size':'1KB'}",10000,42.88,233.2,0.23,,,,,0,8.31,33.02,185.25,0.11
+storage,avrora_kv_inproc,concurrent_write,"{'batch':1,'dataset_rows':10000,'size':'1KB','timing':{'measure_s':20.0,'warmup_s':3.0},'workers':16}",4365,20.0,218.25,0.21,72030.08,85194.08,100420.79,126442.38,0,9.72,36.42,97.11,0.12
+storage,avrora_kv_inproc,data_dir_total,"{'size':'1KB'}",,,,,,,,,,,,,
+correctness,avrora_runtime_inproc,idempotent_producer,"",,,,,,,,,,,,,
+correctness,avrora_runtime_inproc,retry_ack_on_3rd_attempt,"",,,,,,,,,,,,,
+correctness,avrora_runtime_inproc,dlq_max_attempts_3,"",,,,,,,,,,,,,
+correctness,avrora_runtime_inproc,graceful_restart,"",,,,,,,,,,,,,
+correctness,avrora_runtime_child_process,sigkill_crash_recovery,"",,,,,,,,,,,,,

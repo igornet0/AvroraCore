@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use dmc_vault::key::KeyTree;
 
-use crate::codec::{decrypt_scanned, scan_segment, scanned_to_entry, ScannedEntry};
+use crate::codec::{decrypt_scanned, scan_segment_after, scanned_to_entry, ScannedEntry};
 use crate::error::{Error, Result};
 use crate::journal_manifest::SegmentManifestEntry;
 use crate::journal_manifest_v2::{
@@ -38,6 +38,11 @@ impl PartitionReader {
         from_exclusive: u64,
     ) -> Result<Self> {
         manifest_segments.sort_by_key(|s| s.start_sequence);
+        // A sealed segment's manifest range is validated against its footer, so one ending at
+        // or below the start position holds nothing to return: skip it without reading it.
+        manifest_segments.retain(|s| {
+            !(s.state == crate::segment::SegmentState::Sealed && s.end_sequence <= from_exclusive)
+        });
         let segments: Vec<_> = manifest_segments
             .into_iter()
             .map(|s| {
@@ -70,7 +75,7 @@ impl PartitionReader {
                 "segment {segment_id} truncated"
             )));
         }
-        let (_good, entries, _last) = scan_segment(&bytes)?;
+        let entries = scan_segment_after(&bytes, self.from_exclusive)?;
         validate_segment_entry_order(segment_id, self.partition_id, &entries)?;
         self.entries = entries;
         self.entry_idx = 0;

@@ -161,6 +161,23 @@ async fn multi_partition_replay_global_sequence_order() {
     }
 }
 
+/// Simulated external GC of the first sealed segment while the runtime is locked: a forced
+/// `trim_through` on the journal itself (bypasses runtime retention pins, like the previous
+/// raw file removal) that also removes the segment from the published manifest.
+fn force_gc_first_segment(db_path: &std::path::Path, master: &str, first_bytes: &[u8]) {
+    let layout = StorageLayout::from_db_path(db_path);
+    let snap = dmc_vault::persist::DbSnapshot::load(&layout.base_snapshot()).unwrap();
+    let salt = snap.salt().unwrap();
+    let master_key = dmc_vault::KeyMaterial::from_hex(master).unwrap();
+    let kek = dmc_vault::crypto::derive_journal_kek(&master_key, &salt);
+    let mut journal =
+        dmc_journal::Journal::open(dmc_journal::JournalConfig::new(layout.journal_dir()), &kek)
+            .unwrap();
+    let (end, _) = decode_segment_footer(first_bytes).unwrap();
+    let trimmed = journal.trim_through(end).unwrap();
+    assert!(!trimmed.deleted_segments.is_empty(), "forced GC deleted nothing");
+}
+
 #[tokio::test]
 async fn replay_after_gc_history_unavailable() {
     let _seg = SmallSegmentEnv::enable();
@@ -184,9 +201,10 @@ async fn replay_after_gc_history_unavailable() {
     let ids = list_segment_ids(&layout.journal_dir()).unwrap();
     assert!(ids.len() > 1);
     let first = find_segment_path(&layout.journal_dir(), ids[0]).unwrap();
-    assert!(decode_segment_footer(&std::fs::read(&first).unwrap()).is_some());
+    let first_bytes = std::fs::read(&first).unwrap();
+    assert!(decode_segment_footer(&first_bytes).is_some());
     rt.lock().await.unwrap();
-    std::fs::remove_file(&first).unwrap();
+    force_gc_first_segment(&dir.path().join("store.dbs.json"), &master, &first_bytes);
 
     let rt2 = Runtime::at_path(dir.path().join("store.dbs.json"));
     rt2.unlock(&master).await.unwrap();

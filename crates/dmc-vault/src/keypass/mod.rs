@@ -193,12 +193,11 @@ pub fn save(dir: &Path, bundle: &KeyPassBundle) -> Result<()> {
     fs::create_dir_all(dir).map_err(|e| Error::Io(e.to_string()))?;
     let meta_raw =
         serde_json::to_vec_pretty(&bundle.meta).map_err(|e| Error::Persist(e.to_string()))?;
-    let meta_tmp = dir.join(format!("{META_FILE}.tmp"));
-    let cipher_tmp = dir.join(format!("{CIPHER_FILE}.tmp"));
-    fs::write(&meta_tmp, meta_raw).map_err(|e| Error::Io(e.to_string()))?;
-    fs::write(&cipher_tmp, &bundle.ciphertext).map_err(|e| Error::Io(e.to_string()))?;
-    fs::rename(&meta_tmp, dir.join(META_FILE)).map_err(|e| Error::Io(e.to_string()))?;
-    fs::rename(&cipher_tmp, dir.join(CIPHER_FILE)).map_err(|e| Error::Io(e.to_string()))?;
+    // Wrapped master + KDF params: owner-only (limits offline guessing to the owner account).
+    crate::secure_fs::write_secret_file(&dir.join(CIPHER_FILE), &bundle.ciphertext)
+        .map_err(|e| Error::Io(e.to_string()))?;
+    crate::secure_fs::write_secret_file(&dir.join(META_FILE), &meta_raw)
+        .map_err(|e| Error::Io(e.to_string()))?;
     Ok(())
 }
 

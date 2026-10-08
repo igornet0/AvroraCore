@@ -21,6 +21,16 @@ pub struct BackupManifest {
     /// Wall-clock metadata — not part of logical equality.
     pub created_at: String,
     pub files: Vec<BackupFileEntry>,
+    /// D4-A: content components are sealed with the storage keys (see `sealed`).
+    #[serde(default)]
+    pub encrypted: bool,
+    /// Backup id the artifact was created as; sealed components are bound to it.
+    #[serde(default)]
+    pub backup_id: String,
+    /// D4-C: the generation this backup was registered under in the installation's backup
+    /// registry (authenticated with the rest of the manifest).
+    #[serde(default)]
+    pub registry_generation: u64,
 }
 
 impl BackupManifest {
@@ -37,6 +47,9 @@ impl BackupManifest {
             && self.recovery_metadata == other.recovery_metadata
             && self.options == other.options
             && self.files == other.files
+            && self.encrypted == other.encrypted
+            && self.backup_id == other.backup_id
+            && self.registry_generation == other.registry_generation
     }
 }
 
@@ -137,4 +150,10 @@ pub enum BackupFileRole {
     CatalogPlaceholder,
     StoragePlaceholder,
     MetadataPlaceholder,
+    /// CLIENT_OWNED key directory (public keys, HPKE envelopes, grants) and sealed-column
+    /// rules. Public / wrapped material only — no private keys, roots or plaintext DEKs.
+    Ownership,
+    /// D4-E: the installation's key store (salt, unlock proof, wrapped DEKs) — opens
+    /// nothing without the client-held Master Key. Encrypted backups only.
+    KeyStore,
 }

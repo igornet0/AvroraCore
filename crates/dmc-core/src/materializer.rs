@@ -101,16 +101,22 @@ pub fn overlay_from_records(records: Vec<OverlayRecord>) -> OverlayStore {
     store
 }
 
+/// Key-tree metadata for `path` and every existing ancestor, ordered root → leaf.
+///
+/// Walks the ancestor chain (O(depth)) instead of exporting the whole tree; the result is
+/// identical to filtering `list_nodes()` by `is_prefix_of(path)` (same set, same order).
 pub fn node_bundle(kv: &EncryptedKv, path: &KeyPath) -> Vec<dmc_vault::KeyNodeMeta> {
-    kv.tree()
-        .list_nodes()
-        .into_iter()
-        .filter(|n| {
-            n.key_path()
-                .map(|p| p.is_prefix_of(path))
-                .unwrap_or(false)
-        })
-        .collect()
+    let tree = kv.tree();
+    let mut bundle = Vec::new();
+    let mut current = Some(path.clone());
+    while let Some(p) = current {
+        if let Some(meta) = tree.meta(&p) {
+            bundle.push(meta);
+        }
+        current = p.parent();
+    }
+    bundle.reverse();
+    bundle
 }
 
 pub struct Materializer<'a> {
@@ -267,4 +273,46 @@ pub fn core_event_from_journal(entry: &JournalEntry) -> CoreEvent {
         &entry.actor_role,
         None::<&StreamId>,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dmc_vault::key::KeyTree;
+
+    fn legacy_node_bundle(kv: &EncryptedKv, path: &KeyPath) -> Vec<dmc_vault::KeyNodeMeta> {
+        kv.tree()
+            .list_nodes()
+            .into_iter()
+            .filter(|n| n.key_path().map(|p| p.is_prefix_of(path)).unwrap_or(false))
+            .collect()
+    }
+
+    fn summary(b: &[dmc_vault::KeyNodeMeta]) -> Vec<(String, String, u64)> {
+        b.iter()
+            .map(|m| (m.path.clone(), m.id_hex.clone(), m.generation))
+            .collect()
+    }
+
+    #[test]
+    fn node_bundle_matches_full_tree_filter() {
+        let mut kv = EncryptedKv::new(KeyTree::new_with_root());
+        for raw in ["a/b/c", "a/b/d", "a/bb", "ab/c", "x", "a/b/c/e"] {
+            kv.tree_mut()
+                .ensure_node(&KeyPath::parse(raw).unwrap())
+                .unwrap();
+        }
+        for raw in [
+            "", "a", "a/b", "a/b/c", "a/b/c/e", "a/bb", "ab/c", "x", "a/b/zz", "nope/n",
+        ] {
+            let path = KeyPath::parse(raw).unwrap();
+            let fast = node_bundle(&kv, &path);
+            assert_eq!(
+                summary(&fast),
+                summary(&legacy_node_bundle(&kv, &path)),
+                "{raw}"
+            );
+            assert_eq!(fast[0].path, "/", "root first for {raw}");
+        }
+    }
 }

@@ -383,9 +383,10 @@ fn sql_commit_and_rollback_emit_transaction_events() {
 #[test]
 fn backup_create_verify_restore_recovery_audited() {
     let dir = tempdir().unwrap();
-    let (mut state, _master) = bootstrap_core_state_locked(dir.path(), true);
+    let (mut state, master) = bootstrap_core_state_locked(dir.path(), true);
     let sink = attach_audit(&mut state);
-    let (sid, _) = auth_pair(&mut state, 1);
+    let (sid, binding) = auth_pair(&mut state, 1);
+    unlock(&mut state, 50, &sid, &binding, master); // D4-F: backups need open storage
     sink.clear();
 
     control(

@@ -13,6 +13,7 @@ services:
       dockerfile: Dockerfile
       additional_contexts:
         client: ../AvroraClient
+        backupsas: ../BackupSAS
       args:
         RUST_VERSION: ${RUST_VERSION:-1.88}
         NODE_VERSION: ${NODE_VERSION:-22}
@@ -43,6 +44,7 @@ services:
       dockerfile: Dockerfile
       additional_contexts:
         client: ../AvroraClient
+        backupsas: ../BackupSAS
       args:
         RUST_VERSION: ${RUST_VERSION:-1.88}
         NODE_VERSION: ${NODE_VERSION:-22}

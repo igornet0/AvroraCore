@@ -457,5 +457,8 @@ fn minimal_manifest(n: u64) -> BackupManifest {
         options: BackupOptions::default(),
         created_at: "t0".into(),
         files: vec![],
+        encrypted: false,
+        backup_id: String::new(),
+        registry_generation: 0,
     }
 }

@@ -12,6 +12,8 @@ pub enum LexError {
     UnterminatedBlockComment { span: SourceSpan },
     #[error("invalid number literal at {span}")]
     InvalidNumber { span: SourceSpan },
+    #[error("invalid blob literal at {span} (expected X'<even number of hex digits>')")]
+    InvalidBlob { span: SourceSpan },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -39,7 +41,8 @@ impl ParseError {
                 | LexError::UnterminatedString { span }
                 | LexError::UnterminatedQuotedIdentifier { span }
                 | LexError::UnterminatedBlockComment { span }
-                | LexError::InvalidNumber { span } => *span,
+                | LexError::InvalidNumber { span }
+                | LexError::InvalidBlob { span } => *span,
             }),
             ParseError::Syntax { span, .. } => Some(*span),
             ParseError::Eof => None,

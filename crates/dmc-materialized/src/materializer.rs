@@ -8,16 +8,14 @@ use dmc_model::{
     TransactionEvent,
 };
 use dmc_storage::{
-    apply_data_event_batch_with_index_arcs, build_index_from_table, collect_table_statistics,
+    apply_data_event_batch_with_index_arcs, build_index_from_table_with, collect_table_statistics,
     destroy_index_store,
-    destroy_table_store, ensure_table_store, index_manifest_exists, IndexStore, TableStore,
+    destroy_table_store, ensure_table_store_with, index_manifest_exists, IndexStore, TableStore,
 };
 
 use crate::error::{storage_err, Error, Result};
 use crate::event_log::{StateEventLog, StateEventRecord};
-use crate::persist::{
-    load_materialized_snapshot, save_materialized_snapshot, MaterializedStateSnapshot,
-};
+use crate::persist::MaterializedStateSnapshot;
 use crate::statistics_refresh::{statistics_refresh_plan, StatisticsRefreshPlan};
 use crate::StatisticsCatalog;
 
@@ -37,6 +35,10 @@ pub struct StateMaterializer<L: StateEventLog> {
     seen_event_ids: HashSet<[u8; 16]>,
     snapshot_path: Option<PathBuf>,
     statistics: StatisticsCatalog,
+    /// CLIENT_OWNED columns: values must be well-formed CLIENT-domain sealed records.
+    sealed_columns: Vec<crate::protect::SealedColumnRule>,
+    /// D4-A storage cipher shared by every encrypted writer of this materializer.
+    cipher: Option<Arc<dmc_vault::StorageCipher>>,
 }
 
 impl StateMaterializer<crate::event_log::MemoryStateEventLog> {
@@ -52,8 +54,34 @@ impl StateMaterializer<crate::event_log::MemoryStateEventLog> {
             index_stores: HashMap::new(),
             seen_event_ids: HashSet::new(),
             snapshot_path: None,
-            statistics: StatisticsCatalog::open(storage_root).unwrap_or_default(),
+            statistics: StatisticsCatalog::open(&storage_root).unwrap_or_default(),
+            sealed_columns: crate::protect::load_sealed_columns(&storage_root).unwrap_or_default(),
+            cipher: None,
         }
+    }
+
+    /// In-memory event log over storage written with the D4-A cipher (row segments,
+    /// indexes, statistics are sealed). Unlike [`Self::in_memory`], unreadable statistics
+    /// or sealed-column rules are an error, never silently replaced by defaults.
+    pub fn in_memory_with_cipher(
+        storage_root: impl Into<PathBuf>,
+        cipher: Option<Arc<dmc_vault::StorageCipher>>,
+    ) -> Result<Self> {
+        let storage_root = storage_root.into();
+        std::fs::create_dir_all(&storage_root).map_err(|e| Error::Io(e.to_string()))?;
+        Ok(Self {
+            catalog: Catalog::new(),
+            watermark: MaterializedWatermark::default(),
+            log: crate::event_log::MemoryStateEventLog::default(),
+            storage_root: storage_root.clone(),
+            table_stores: HashMap::new(),
+            index_stores: HashMap::new(),
+            seen_event_ids: HashSet::new(),
+            snapshot_path: None,
+            statistics: StatisticsCatalog::open_with(&storage_root, cipher.clone())?,
+            sealed_columns: crate::protect::load_sealed_columns(&storage_root)?,
+            cipher,
+        })
     }
 }
 
@@ -63,9 +91,19 @@ impl StateMaterializer<crate::event_log::FileStateEventLog> {
         snapshot_path: PathBuf,
         event_log_path: PathBuf,
     ) -> Result<Self> {
+        Self::open_with_cipher(storage_root, snapshot_path, event_log_path, None)
+    }
+
+    /// Open with the D4-A storage cipher (encrypted writers use it as they are converted).
+    pub fn open_with_cipher(
+        storage_root: impl Into<PathBuf>,
+        snapshot_path: PathBuf,
+        event_log_path: PathBuf,
+        cipher: Option<Arc<dmc_vault::StorageCipher>>,
+    ) -> Result<Self> {
         let storage_root = storage_root.into();
         std::fs::create_dir_all(&storage_root).map_err(|e| Error::Io(e.to_string()))?;
-        let log = crate::event_log::FileStateEventLog::open(event_log_path)?;
+        let log = crate::event_log::FileStateEventLog::open_with(event_log_path, cipher.clone())?;
         let mut mat = Self {
             catalog: Catalog::new(),
             watermark: MaterializedWatermark::default(),
@@ -75,12 +113,23 @@ impl StateMaterializer<crate::event_log::FileStateEventLog> {
             index_stores: HashMap::new(),
             seen_event_ids: HashSet::new(),
             snapshot_path: Some(snapshot_path),
-            statistics: StatisticsCatalog::open(&storage_root)?,
+            statistics: StatisticsCatalog::open_with(&storage_root, cipher.clone())?,
+            sealed_columns: crate::protect::load_sealed_columns(&storage_root)?,
+            cipher,
         };
+        // D4-B: before replay can touch any store, the stores must not be older than the
+        // (sealed) snapshot recorded them.
+        if let (Some(c), Some(path)) = (mat.cipher.as_deref(), &mat.snapshot_path) {
+            if let Some(snapshot) = crate::persist::load_materialized_snapshot_with(path, Some(c))? {
+                verify_storage_freshness(&mat.storage_root, &snapshot, mat.log.events(), c)?;
+            }
+        }
         if !mat.log.events().is_empty() {
             mat.replay_from_log()?;
         } else if let Some(path) = &mat.snapshot_path {
-            if let Some(snapshot) = load_materialized_snapshot(path)? {
+            if let Some(snapshot) =
+                crate::persist::load_materialized_snapshot_with(path, mat.cipher.as_deref())?
+            {
                 mat.watermark = snapshot.watermark;
                 mat.catalog = Catalog::from_snapshot_body(snapshot.catalog)?;
                 mat.seen_event_ids = snapshot.seen_event_ids.into_iter().collect();
@@ -99,18 +148,32 @@ impl StateMaterializer<crate::event_log::FileStateEventLog> {
         snapshot_path: PathBuf,
         event_log_path: PathBuf,
     ) -> Result<Self> {
+        Self::open_recovered_with_cipher(storage_root, snapshot_path, event_log_path, None)
+    }
+
+    pub fn open_recovered_with_cipher(
+        storage_root: impl Into<PathBuf>,
+        snapshot_path: PathBuf,
+        event_log_path: PathBuf,
+        cipher: Option<Arc<dmc_vault::StorageCipher>>,
+    ) -> Result<Self> {
         let storage_root = storage_root.into();
         std::fs::create_dir_all(&storage_root).map_err(|e| Error::Io(e.to_string()))?;
-        let log = crate::event_log::FileStateEventLog::open(event_log_path)?;
+        let log = crate::event_log::FileStateEventLog::open_with(event_log_path, cipher.clone())?;
         let tip = log.tip_sequence();
-        let snapshot = load_materialized_snapshot(&snapshot_path)?.ok_or_else(|| {
-            Error::Corrupt("recovered open requires materialized_snapshot.json".into())
-        })?;
+        let snapshot =
+            crate::persist::load_materialized_snapshot_with(&snapshot_path, cipher.as_deref())?
+                .ok_or_else(|| {
+                    Error::Corrupt("recovered open requires materialized_snapshot.json".into())
+                })?;
         if snapshot.watermark.sequence != tip {
             return Err(Error::Corrupt(format!(
                 "recovered snapshot watermark {} != journal tip {tip}",
                 snapshot.watermark.sequence
             )));
+        }
+        if let Some(c) = cipher.as_deref() {
+            verify_storage_freshness(&storage_root, &snapshot, log.events(), c)?;
         }
         let mut mat = Self {
             catalog: Catalog::from_snapshot_body(snapshot.catalog)?,
@@ -121,7 +184,9 @@ impl StateMaterializer<crate::event_log::FileStateEventLog> {
             index_stores: HashMap::new(),
             seen_event_ids: snapshot.seen_event_ids.into_iter().collect(),
             snapshot_path: Some(snapshot_path),
-            statistics: StatisticsCatalog::open(&storage_root)?,
+            statistics: StatisticsCatalog::open_with(&storage_root, cipher.clone())?,
+            sealed_columns: crate::protect::load_sealed_columns(&storage_root)?,
+            cipher,
         };
         mat.open_existing_table_stores()?;
         mat.open_existing_index_stores()?;
@@ -130,6 +195,11 @@ impl StateMaterializer<crate::event_log::FileStateEventLog> {
 }
 
 impl<L: StateEventLog> StateMaterializer<L> {
+    /// D4-A storage cipher, if this materializer writes encrypted storage.
+    pub fn storage_cipher(&self) -> Option<&Arc<dmc_vault::StorageCipher>> {
+        self.cipher.as_ref()
+    }
+
     pub fn catalog(&self) -> &Catalog {
         &self.catalog
     }
@@ -180,17 +250,44 @@ impl<L: StateEventLog> StateMaterializer<L> {
             return Ok(store.lock().expect("table store lock").next_row_id());
         }
             if dmc_storage::table_manifest_exists(&self.storage_root, table_id) {
-            let store = TableStore::open(&self.storage_root, table_id).map_err(storage_err)?;
+            let store = self.open_table_store_file(table_id)?;
             return Ok(store.next_row_id());
         }
         Err(Error::NotFound(format!("table {table_id:?} not materialized")))
     }
 
     pub fn mutate(&mut self, event: StateEvent) -> Result<StateEventRecord> {
+        crate::protect::check_sealed_columns(&self.sealed_columns, &self.catalog, &event)?;
         let record = self.log.append(event)?;
         self.apply_record(&record, ApplyMode::Live)?;
         self.persist_snapshot_if_configured()?;
         Ok(record)
+    }
+
+    /// Declare a BLOB column CLIENT_OWNED (explicit, persisted, existing values must already
+    /// be NULL or CLIENT-domain sealed — nothing is reinterpreted or migrated silently).
+    pub fn declare_sealed_column(&mut self, rule: crate::protect::SealedColumnRule) -> Result<()> {
+        crate::protect::validate_declaration(&rule, &self.catalog)?;
+        if let Ok(store) = self.shared_table_store(dmc_model::TableId::new(rule.table_id)) {
+            let store = store.lock().expect("table store lock");
+            for row_id in store.live_row_ids() {
+                let values = store
+                    .get(row_id)
+                    .map_err(|e| Error::Corrupt(e.to_string()))?
+                    .ok_or_else(|| Error::Corrupt("live row vanished".into()))?;
+                let row: Vec<_> = values.iter().map(dmc_storage::stored_value_to_row).collect();
+                crate::protect::check_row(&rule, &self.catalog, &row)?;
+            }
+        }
+        if !self.sealed_columns.contains(&rule) {
+            self.sealed_columns.push(rule);
+            crate::protect::save_sealed_columns(&self.storage_root, &self.sealed_columns)?;
+        }
+        Ok(())
+    }
+
+    pub fn sealed_columns(&self) -> &[crate::protect::SealedColumnRule] {
+        &self.sealed_columns
     }
 
     pub fn mutate_catalog(&mut self, event: CatalogEvent) -> Result<StateEventRecord> {
@@ -292,12 +389,17 @@ impl<L: StateEventLog> StateMaterializer<L> {
 
     pub fn persist_snapshot_if_configured(&self) -> Result<()> {
         if let Some(path) = &self.snapshot_path {
-            let snapshot = MaterializedStateSnapshot::new(
+            let mut snapshot = MaterializedStateSnapshot::new(
                 self.watermark,
                 self.catalog.to_snapshot_body(),
                 self.seen_event_ids.iter().copied().collect(),
             );
-            save_materialized_snapshot(path, &snapshot)?;
+            snapshot.storage_generations = self.storage_generations();
+            crate::persist::save_materialized_snapshot_with(
+                path,
+                &snapshot,
+                self.cipher.as_deref(),
+            )?;
         }
         Ok(())
     }
@@ -322,10 +424,45 @@ impl<L: StateEventLog> StateMaterializer<L> {
         Ok(())
     }
 
+    /// Current generation of every open table / index store (D4-B).
+    pub fn storage_generations(&self) -> crate::persist::StorageGenerations {
+        let mut g = crate::persist::StorageGenerations::default();
+        for (id, store) in &self.table_stores {
+            g.tables
+                .insert(id.raw(), store.lock().expect("table store lock").generation());
+        }
+        for (id, store) in &self.index_stores {
+            g.indexes
+                .insert(id.raw(), store.lock().expect("index store lock").generation());
+        }
+        g
+    }
+
+    /// Opens a table's row store with this materializer's storage keys (sealed segments).
+    fn open_table_store_file(&self, table_id: TableId) -> Result<TableStore> {
+        TableStore::open_with_cipher(
+            &self.storage_root,
+            table_id,
+            dmc_storage::DEFAULT_MAX_SEGMENT_BYTES,
+            self.cipher.clone(),
+        )
+        .map_err(storage_err)
+    }
+
+    /// Opens an index store with this materializer's storage keys (sealed index data).
+    fn open_index_store_file(
+        &self,
+        definition: IndexDefinition,
+        schema: &dmc_storage::TableSchema,
+    ) -> Result<IndexStore> {
+        IndexStore::open_with_cipher(&self.storage_root, definition, schema, self.cipher.clone())
+            .map_err(storage_err)
+    }
+
     fn open_existing_table_stores(&mut self) -> Result<()> {
         for table in self.catalog.tables() {
             if dmc_storage::table_manifest_exists(&self.storage_root, table.id) {
-                let store = TableStore::open(&self.storage_root, table.id).map_err(storage_err)?;
+                let store = self.open_table_store_file(table.id)?;
                 self.table_stores
                     .insert(table.id, Arc::new(Mutex::new(store)));
             }
@@ -343,15 +480,11 @@ impl<L: StateEventLog> StateMaterializer<L> {
                 let schema = if let Some(store) = self.table_stores.get(&table.id) {
                     store.lock().expect("table store lock").schema().clone()
                 } else if dmc_storage::table_manifest_exists(&self.storage_root, table.id) {
-                    TableStore::open(&self.storage_root, table.id)
-                        .map_err(storage_err)?
-                        .schema()
-                        .clone()
+                    self.open_table_store_file(table.id)?.schema().clone()
                 } else {
                     continue;
                 };
-                let store =
-                    IndexStore::open(&self.storage_root, definition, &schema).map_err(storage_err)?;
+                let store = self.open_index_store_file(definition, &schema)?;
                 self.index_stores
                     .insert(index.id, Arc::new(Mutex::new(store)));
             }
@@ -382,9 +515,10 @@ impl<L: StateEventLog> StateMaterializer<L> {
                     .iter()
                     .map(|c| (c.id, c.data_type.clone(), c.nullable))
                     .collect();
-                let store = ensure_table_store(&self.storage_root, *id, &cols).map_err(storage_err)?;
-                self.table_stores
-                    .insert(*id, Arc::new(Mutex::new(store)));
+                let store =
+                    ensure_table_store_with(&self.storage_root, *id, &cols, self.cipher.clone())
+                        .map_err(storage_err)?;
+                self.table_stores.insert(*id, Arc::new(Mutex::new(store)));
             }
             CatalogEvent::DropTable { table_id } => {
                 if let Some(table) = self.catalog.table(*table_id) {
@@ -418,8 +552,7 @@ impl<L: StateEventLog> StateMaterializer<L> {
                     if index_manifest_exists(&self.storage_root, *id) {
                         let table_store = self.open_table_store(*table_id)?;
                         let schema = table_store.lock().expect("table store lock").schema().clone();
-                        let store = IndexStore::open(&self.storage_root, definition, &schema)
-                            .map_err(storage_err)?;
+                        let store = self.open_index_store_file(definition, &schema)?;
                         self.index_stores
                             .insert(*id, Arc::new(Mutex::new(store)));
                         return Ok(());
@@ -427,8 +560,13 @@ impl<L: StateEventLog> StateMaterializer<L> {
                 }
                 let table_store = self.open_table_store(*table_id)?;
                 let table = table_store.lock().expect("table store lock");
-                let index = build_index_from_table(&self.storage_root, definition, &table)
-                    .map_err(storage_err)?;
+                let index = build_index_from_table_with(
+                    &self.storage_root,
+                    definition,
+                    &table,
+                    self.cipher.clone(),
+                )
+                .map_err(storage_err)?;
                 drop(table);
                 self.index_stores
                     .insert(*id, Arc::new(Mutex::new(index)));
@@ -542,7 +680,7 @@ impl<L: StateEventLog> StateMaterializer<L> {
 
     fn reload_table_store(&mut self, table_id: TableId) -> Result<()> {
         if dmc_storage::table_manifest_exists(&self.storage_root, table_id) {
-            let store = TableStore::open(&self.storage_root, table_id).map_err(storage_err)?;
+            let store = self.open_table_store_file(table_id)?;
             self.table_stores
                 .insert(table_id, Arc::new(Mutex::new(store)));
         } else {
@@ -573,8 +711,7 @@ impl<L: StateEventLog> StateMaterializer<L> {
             );
             let table_store = self.open_table_store(table_id)?;
             let schema = table_store.lock().expect("table store lock").schema().clone();
-            let store = IndexStore::open(&self.storage_root, definition, &schema)
-                .map_err(storage_err)?;
+            let store = self.open_index_store_file(definition, &schema)?;
             self.index_stores
                 .insert(index_id, Arc::new(Mutex::new(store)));
         } else {
@@ -601,7 +738,9 @@ impl<L: StateEventLog> StateMaterializer<L> {
             .iter()
             .map(|c| (c.id, c.data_type.clone(), c.nullable))
             .collect();
-        let store = ensure_table_store(&self.storage_root, table_id, &cols).map_err(storage_err)?;
+        let store =
+            ensure_table_store_with(&self.storage_root, table_id, &cols, self.cipher.clone())
+                .map_err(storage_err)?;
         let arc = Arc::new(Mutex::new(store));
         self.table_stores.insert(table_id, Arc::clone(&arc));
         Ok(arc)
@@ -663,8 +802,13 @@ impl<L: StateEventLog> StateMaterializer<L> {
         for (table_id, definition) in definitions {
             let table = self.open_table_store(table_id)?;
             let guard = table.lock().expect("table store lock");
-            let index = build_index_from_table(&self.storage_root, definition.clone(), &guard)
-                .map_err(storage_err)?;
+            let index = build_index_from_table_with(
+                &self.storage_root,
+                definition.clone(),
+                &guard,
+                self.cipher.clone(),
+            )
+            .map_err(storage_err)?;
             drop(guard);
             self.index_stores
                 .insert(definition.id, Arc::new(Mutex::new(index)));
@@ -711,7 +855,17 @@ pub fn rebuild_materialized_from_event_log(
     storage_root: &Path,
     event_log_path: &Path,
 ) -> Result<(Catalog, MaterializedWatermark)> {
-    let log = crate::event_log::FileStateEventLog::open(event_log_path)?;
+    rebuild_materialized_from_event_log_with(storage_root, event_log_path, None)
+}
+
+/// Replay `event_log_path` into `storage_root` with the D4-A storage keys. Statistics that
+/// cannot be read (e.g. sealed, no keys) are an error — never replaced by empty defaults.
+pub fn rebuild_materialized_from_event_log_with(
+    storage_root: &Path,
+    event_log_path: &Path,
+    cipher: Option<Arc<dmc_vault::StorageCipher>>,
+) -> Result<(Catalog, MaterializedWatermark)> {
+    let log = crate::event_log::FileStateEventLog::open_with(event_log_path, cipher.clone())?;
     let mut mat = StateMaterializer {
         catalog: Catalog::new(),
         watermark: MaterializedWatermark::default(),
@@ -721,8 +875,77 @@ pub fn rebuild_materialized_from_event_log(
         index_stores: HashMap::new(),
         seen_event_ids: HashSet::new(),
         snapshot_path: None,
-        statistics: StatisticsCatalog::open(storage_root).unwrap_or_default(),
+        statistics: StatisticsCatalog::open_with(storage_root, cipher.clone())?,
+        // Replay of an existing log is never blocked by write-time policy.
+        sealed_columns: Vec::new(),
+        cipher,
     };
     mat.replay_from_log()?;
     Ok((mat.catalog, mat.watermark))
+}
+
+/// D4-B: every table / index recorded in the sealed `snapshot` is present with at least the
+/// recorded generation (authenticated: sealed table manifest, generation inside sealed index
+/// data). Tables / indexes dropped by journal events after the snapshot are exempt (a crash
+/// between the drop and the next snapshot). A store older than recorded is a rollback.
+fn verify_storage_freshness(
+    storage_root: &Path,
+    snapshot: &MaterializedStateSnapshot,
+    events: &[StateEventRecord],
+    cipher: &dmc_vault::StorageCipher,
+) -> Result<()> {
+    let recorded = &snapshot.storage_generations;
+    if recorded.tables.is_empty() && recorded.indexes.is_empty() {
+        return Ok(());
+    }
+    let mut dropped_tables = HashSet::new();
+    let mut dropped_indexes = HashSet::new();
+    let mut note = |e: &CatalogEvent| match e {
+        CatalogEvent::DropTable { table_id } => {
+            dropped_tables.insert(table_id.raw());
+        }
+        CatalogEvent::DropIndex { index_id } => {
+            dropped_indexes.insert(index_id.raw());
+        }
+        _ => {}
+    };
+    for r in events.iter().filter(|r| r.sequence > snapshot.watermark.sequence) {
+        match &r.event {
+            StateEvent::Catalog(e) => note(e),
+            StateEvent::TransactionCommit { events, .. } => {
+                events.iter().filter_map(|te| te.as_catalog()).for_each(&mut note)
+            }
+            StateEvent::Data(_) => {}
+        }
+    }
+    let catalog = Catalog::from_snapshot_body(snapshot.catalog.clone())?;
+    for t in catalog.tables().filter(|t| dropped_tables.contains(&t.id.raw())) {
+        dropped_indexes.extend(t.indexes.iter().map(|i| i.id.raw()));
+    }
+    let check = |kind: &str, id: u64, want: u64, have: Option<u64>| match have {
+        Some(g) if g >= want => Ok(()),
+        Some(g) => Err(Error::Corrupt(format!(
+            "{kind} {id}: storage generation {g} older than recorded {want} (rollback)"
+        ))),
+        None => Err(Error::Corrupt(format!(
+            "{kind} {id}: recorded in the snapshot but missing (deleted or rolled back)"
+        ))),
+    };
+    for (&id, &want) in &recorded.tables {
+        if dropped_tables.contains(&id) {
+            continue;
+        }
+        let have = dmc_storage::sealed_table_generation(storage_root, TableId::new(id), cipher)
+            .map_err(storage_err)?;
+        check("table", id, want, have)?;
+    }
+    for (&id, &want) in &recorded.indexes {
+        if dropped_indexes.contains(&id) {
+            continue;
+        }
+        let have = dmc_storage::sealed_index_generation(storage_root, IndexId::new(id), cipher)
+            .map_err(storage_err)?;
+        check("index", id, want, have)?;
+    }
+    Ok(())
 }

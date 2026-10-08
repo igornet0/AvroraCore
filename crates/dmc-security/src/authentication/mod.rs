@@ -8,20 +8,21 @@ use serde::Serialize;
 use tokio::sync::Mutex;
 use totp_rs::{Builder, Secret};
 
-use crate::credentials::{load_file, save_file, AuthFile};
-use crate::crypto::hash_access_key;
+use crate::credentials::{load_file, save_file, AuthFile, AUTH_FILE_V2_ARGON2ID};
+use crate::crypto::{auth_file_v2, new_access_key_record, verify_access_key, AccessKeyRecord};
 use crate::error::AuthError;
 use crate::identity::{ISSUER, UI_OPERATOR};
 use crate::sessions::BearerStore;
 use crate::IdentityService;
 
-#[derive(Clone)]
 struct PendingSetup {
-    salt: [u8; 16],
-    access_key_hash: String,
-    totp_secret_b32: String,
+    record: AccessKeyRecord,
+    totp_secret_b32: zeroize::Zeroizing<String>,
     created_at: Instant,
 }
+
+/// Same message for every login failure (no oracle for which factor was wrong).
+const INVALID_LOGIN: &str = "invalid access key or 2FA";
 
 #[derive(Default)]
 struct AuthInner {
@@ -43,18 +44,32 @@ pub struct AuthStatus {
     pub path: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+/// Returned once to the enrolling operator. `Debug` is redacted; serialize only into the
+/// enrollment HTTP response.
+#[derive(Clone, Serialize)]
 pub struct SetupBeginResponse {
     pub totp_secret: String,
     pub otpauth_url: String,
     pub qr_png_base64: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+impl std::fmt::Debug for SetupBeginResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SetupBeginResponse([REDACTED])")
+    }
+}
+
+#[derive(Clone, Serialize)]
 pub struct DevUiCredentials {
     pub access_key: String,
     pub totp_secret: String,
     pub otpauth_url: String,
+}
+
+impl std::fmt::Debug for DevUiCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DevUiCredentials([REDACTED])")
+    }
 }
 
 /// Dev-only: enroll access key + TOTP without browser setup (random TOTP).
@@ -68,8 +83,6 @@ pub fn dev_enroll_ui_auth_with_totp(
     access_key: &str,
     totp_secret_b32: Option<&str>,
 ) -> Result<DevUiCredentials, AuthError> {
-    use crate::credentials::{load_file, save_file, AuthFile};
-    use crate::crypto::hash_access_key;
     use crate::identity::{ISSUER, UI_OPERATOR};
     use totp_rs::{Builder, Secret};
 
@@ -86,9 +99,8 @@ pub fn dev_enroll_ui_auth_with_totp(
         ));
     }
 
-    let mut salt = [0u8; 16];
-    rand::fill(&mut salt);
-    let access_key_hash = hash_access_key(&salt, access_key);
+    let record = new_access_key_record(access_key)
+        .ok_or_else(|| AuthError::BadRequest("access key hashing failed".into()))?;
     let totp_secret_b32 = match totp_secret_b32.map(str::trim).filter(|s| !s.is_empty()) {
         Some(fixed) => {
             let _ = Secret::try_from_base32(fixed)
@@ -109,12 +121,7 @@ pub fn dev_enroll_ui_auth_with_totp(
         .to_url()
         .map_err(|e| AuthError::BadRequest(e.to_string()))?;
 
-    let file = AuthFile {
-        version: 1,
-        salt_hex: hex::encode(salt),
-        access_key_hash,
-        totp_secret_b32: totp_secret_b32.clone(),
-    };
+    let file = auth_file_v2(record, totp_secret_b32.clone());
     save_file(path, &file)?;
 
     Ok(DevUiCredentials {
@@ -165,9 +172,8 @@ impl AuthManager {
             ));
         }
 
-        let mut salt = [0u8; 16];
-        rand::fill(&mut salt);
-        let access_key_hash = hash_access_key(&salt, access_key);
+        let record = new_access_key_record(access_key)
+            .ok_or_else(|| AuthError::BadRequest("access key hashing failed".into()))?;
 
         let secret = Secret::generate();
         let totp_secret_b32 = secret.to_base32();
@@ -185,9 +191,8 @@ impl AuthManager {
         let qr_png_base64 = totp.to_qr_base64().ok();
 
         g.pending = Some(PendingSetup {
-            salt,
-            access_key_hash,
-            totp_secret_b32: totp_secret_b32.clone(),
+            record,
+            totp_secret_b32: zeroize::Zeroizing::new(totp_secret_b32.clone()),
             created_at: Instant::now(),
         });
 
@@ -218,23 +223,25 @@ impl AuthManager {
             return Err(AuthError::BadRequest("setup expired; start again".into()));
         }
 
-        let hash = hash_access_key(&pending.salt, access_key);
-        if hash != pending.access_key_hash {
-            return Err(AuthError::Unauthorized("invalid access key".into()));
+        if !pending.record.verifier.matches(
+            &dmc_vault::ownership::derive_credential_secrets(
+                access_key,
+                &pending.record.salt,
+                &pending.record.kdf,
+            )
+            .map_err(|_| AuthError::Unauthorized(INVALID_LOGIN.into()))?
+            .verifier,
+        ) {
+            return Err(AuthError::Unauthorized(INVALID_LOGIN.into()));
         }
         if !verify_totp(&pending.totp_secret_b32, totp_code)? {
-            return Err(AuthError::Unauthorized("invalid 2FA code".into()));
+            return Err(AuthError::Unauthorized(INVALID_LOGIN.into()));
         }
 
-        let file = AuthFile {
-            version: 1,
-            salt_hex: hex::encode(pending.salt),
-            access_key_hash: pending.access_key_hash.clone(),
-            totp_secret_b32: pending.totp_secret_b32.clone(),
-        };
+        let pending = g.pending.take().expect("checked above");
+        let file = auth_file_v2(pending.record, pending.totp_secret_b32.to_string());
         save_file(&self.path, &file)?;
         g.config = Some(file);
-        g.pending = None;
         Ok(g.sessions.issue())
     }
 
@@ -247,14 +254,21 @@ impl AuthManager {
             AuthError::BadRequest("UI auth not enrolled; complete setup first".into())
         })?;
 
-        let salt = hex::decode(&cfg.salt_hex)
-            .map_err(|_| AuthError::BadRequest("corrupt auth file".into()))?;
-        let hash = hash_access_key(&salt, access_key);
-        if hash != cfg.access_key_hash {
-            return Err(AuthError::Unauthorized("invalid access key or 2FA".into()));
+        // Both factors are always evaluated (no early exit revealing which one failed).
+        let key_ok = verify_access_key(cfg, access_key);
+        let totp_ok = verify_totp(&cfg.totp_secret_b32, totp_code)?;
+        if !(key_ok && totp_ok) {
+            return Err(AuthError::Unauthorized(INVALID_LOGIN.into()));
         }
-        if !verify_totp(&cfg.totp_secret_b32, totp_code)? {
-            return Err(AuthError::Unauthorized("invalid access key or 2FA".into()));
+
+        // Migration: a legacy SHA-256 (v1) file is rewritten as Argon2id (v2) after the
+        // first successful login. The TOTP secret is carried over unchanged.
+        if cfg.version != AUTH_FILE_V2_ARGON2ID {
+            let record = new_access_key_record(access_key)
+                .ok_or_else(|| AuthError::BadRequest("access key hashing failed".into()))?;
+            let upgraded = auth_file_v2(record, cfg.totp_secret_b32.clone());
+            save_file(&self.path, &upgraded)?;
+            g.config = Some(upgraded);
         }
 
         Ok(g.sessions.issue())
@@ -378,5 +392,94 @@ mod tests {
         assert!(auth.validate(&token2).await);
 
         assert!(auth.login("wrong", &code2).await.is_err());
+    }
+
+    fn totp_now(secret: &str) -> String {
+        Builder::new()
+            .with_secret(Secret::try_from_base32(secret).unwrap())
+            .with_account_name(UI_OPERATOR)
+            .with_issuer(Some(ISSUER))
+            .build()
+            .unwrap()
+            .generate_current()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn access_key_stored_as_argon2id_verifier_with_owner_only_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("a.ui-auth.json");
+        dev_enroll_ui_auth_with_totp(&path, "access-key-123", Some(UI_TOTP_SECRET)).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("access-key-123"));
+        assert!(!raw.contains("access_key_hash"), "no legacy SHA-256 field");
+        let file: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(file["version"], 2);
+        assert_eq!(file["kdf"]["alg"], "argon2id-v19");
+        #[cfg(unix)]
+        assert_eq!(dmc_vault::secure_fs::mode_of(&path), Some(0o600));
+
+        let auth = AuthManager::open(&path);
+        assert!(auth.login("access-key-123", &totp_now(UI_TOTP_SECRET)).await.is_ok());
+        let wrong_key = auth.login("access-key-xyz", &totp_now(UI_TOTP_SECRET)).await.unwrap_err();
+        let wrong_totp = auth.login("access-key-123", "000000").await.unwrap_err();
+        assert_eq!(wrong_key.to_string(), wrong_totp.to_string(), "generic error");
+    }
+
+    #[tokio::test]
+    async fn legacy_sha256_file_upgrades_on_login_and_mode_is_tightened() {
+        use sha2::{Digest, Sha256};
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("legacy.ui-auth.json");
+        let salt = [7u8; 16];
+        let mut h = Sha256::new();
+        h.update(salt);
+        h.update(b"legacy-access-key");
+        let legacy = serde_json::json!({
+            "version": 1,
+            "salt_hex": hex::encode(salt),
+            "access_key_hash": hex::encode(h.finalize()),
+            "totp_secret_b32": UI_TOTP_SECRET,
+        });
+        std::fs::write(&path, legacy.to_string()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        let auth = AuthManager::open(&path);
+        #[cfg(unix)]
+        assert_eq!(dmc_vault::secure_fs::mode_of(&path), Some(0o600), "tightened on load");
+        assert!(auth.login("wrong-legacy-key", &totp_now(UI_TOTP_SECRET)).await.is_err());
+        let still_v1: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(still_v1["version"], 1, "no upgrade on failed login");
+
+        auth.login("legacy-access-key", &totp_now(UI_TOTP_SECRET)).await.unwrap();
+        let upgraded: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(upgraded["version"], 2);
+        assert!(upgraded.get("access_key_hash").is_none());
+        assert_eq!(upgraded["totp_secret_b32"], UI_TOTP_SECRET, "TOTP preserved");
+
+        let reopened = AuthManager::open(&path);
+        assert!(reopened.login("legacy-access-key", &totp_now(UI_TOTP_SECRET)).await.is_ok());
+    }
+
+    #[test]
+    fn secret_bearing_types_redact_debug() {
+        let creds = DevUiCredentials {
+            access_key: "access-key-123".into(),
+            totp_secret: UI_TOTP_SECRET.into(),
+            otpauth_url: format!("otpauth://totp/x?secret={UI_TOTP_SECRET}"),
+        };
+        let resp = SetupBeginResponse {
+            totp_secret: UI_TOTP_SECRET.into(),
+            otpauth_url: "otpauth://x".into(),
+            qr_png_base64: None,
+        };
+        let shown = format!("{creds:?} {resp:?}");
+        assert!(!shown.contains(UI_TOTP_SECRET) && !shown.contains("access-key-123"));
     }
 }

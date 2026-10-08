@@ -7,7 +7,13 @@ use avrora_proto::BackupListItem;
 use dmc_journal::StorageLayout;
 use serde::{Deserialize, Serialize};
 
+use crate::control::backup_config::{ALL_SECTIONS, validate_sections};
 use crate::runtime::{DbStatus, Runtime};
+
+pub mod archive;
+pub mod keys;
+pub mod kit;
+pub mod remote;
 
 pub const BACKUP_PREFIX: &str = "backup-";
 pub const RESTORE_PREFIX: &str = "restore-";
@@ -33,6 +39,8 @@ pub enum BackupError {
     InvalidId,
     #[error("backup already exists")]
     AlreadyExists,
+    #[error("remote backup: {0}")]
+    Remote(String),
     #[error("{0}")]
     Io(String),
 }
@@ -46,6 +54,9 @@ pub struct AvroraBackupManifest {
     pub database_id: String,
     pub checkpoint_sequence: u64,
     pub created_at: String,
+    /// Layout sections captured (`base`, `journal`, `runtime`).
+    #[serde(default)]
+    pub sections: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -80,7 +91,7 @@ pub fn opaque_id_ok(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-fn now_rfc3339() -> String {
+pub(crate) fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
@@ -102,15 +113,15 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-fn remove_dir_if_exists(path: &Path) -> Result<()> {
+pub(crate) fn remove_dir_if_exists(path: &Path) -> Result<()> {
     if path.exists() {
         fs::remove_dir_all(path).map_err(|e| BackupError::Io(e.to_string()))?;
     }
     Ok(())
 }
 
-fn copy_layout_snapshot(layout: &StorageLayout, dest: &Path) -> Result<()> {
-    for name in ["base", "journal", "runtime"] {
+fn copy_layout_snapshot(layout: &StorageLayout, dest: &Path, sections: &[String]) -> Result<()> {
+    for name in sections {
         let src = layout.data_dir.join(name);
         if src.is_dir() {
             copy_dir_all(&src, &dest.join(name))?;
@@ -119,7 +130,7 @@ fn copy_layout_snapshot(layout: &StorageLayout, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-fn load_manifest(path: &Path) -> Result<AvroraBackupManifest> {
+pub(crate) fn load_manifest(path: &Path) -> Result<AvroraBackupManifest> {
     let raw = fs::read(path.join(MANIFEST_FILE)).map_err(|_| BackupError::Invalid("missing manifest".into()))?;
     let manifest: AvroraBackupManifest =
         serde_json::from_slice(&raw).map_err(|e| BackupError::Invalid(e.to_string()))?;
@@ -134,9 +145,20 @@ pub async fn create_backup(
     backup_id: &str,
     _include_rowstore: bool,
 ) -> Result<(String, u64)> {
+    let all: Vec<String> = ALL_SECTIONS.iter().map(|s| s.to_string()).collect();
+    create_backup_with_sections(runtime, backup_id, &all).await
+}
+
+/// Create a local backup containing only the given layout sections.
+pub async fn create_backup_with_sections(
+    runtime: &Runtime,
+    backup_id: &str,
+    sections: &[String],
+) -> Result<(String, u64)> {
     if !opaque_id_ok(backup_id) {
         return Err(BackupError::InvalidId);
     }
+    validate_sections(sections).map_err(BackupError::Invalid)?;
     if runtime.status().await != DbStatus::Unlocked {
         return Err(BackupError::VaultLocked);
     }
@@ -160,7 +182,7 @@ pub async fn create_backup(
     remove_dir_if_exists(&staging)?;
     fs::create_dir_all(&staging).map_err(|e| BackupError::Io(e.to_string()))?;
 
-    copy_layout_snapshot(&layout, &staging)?;
+    copy_layout_snapshot(&layout, &staging, sections)?;
 
     let manifest = AvroraBackupManifest {
         format_version: AVRORA_BACKUP_FORMAT_VERSION,
@@ -168,6 +190,7 @@ pub async fn create_backup(
         database_id: db_id,
         checkpoint_sequence: checkpoint,
         created_at: now_rfc3339(),
+        sections: sections.to_vec(),
     };
     fs::write(
         staging.join(MANIFEST_FILE),
@@ -283,6 +306,33 @@ pub async fn recover_backup(
     if runtime.status().await != DbStatus::Locked {
         return Err(BackupError::VaultNotLocked);
     }
+    apply_restored(runtime, restores_root, target_id).await
+}
+
+/// Disaster recovery onto a host without a vault (`DbStatus::Empty`): installs
+/// a staged restore as the live layout. The process must be restarted and the
+/// vault unlocked with the original Master Key afterwards.
+pub async fn recover_into_empty(
+    runtime: &Runtime,
+    restores_root: &Path,
+    target_id: &str,
+) -> Result<(String, u64)> {
+    if !opaque_id_ok(target_id) {
+        return Err(BackupError::InvalidId);
+    }
+    if runtime.status().await != DbStatus::Empty {
+        return Err(BackupError::RecoveryNotReady(
+            "a vault already exists here; lock it and use regular recover".into(),
+        ));
+    }
+    apply_restored(runtime, restores_root, target_id).await
+}
+
+async fn apply_restored(
+    runtime: &Runtime,
+    restores_root: &Path,
+    target_id: &str,
+) -> Result<(String, u64)> {
     let src = restore_dir(restores_root, target_id);
     if !src.is_dir() {
         return Err(BackupError::NotFound);
@@ -349,6 +399,19 @@ pub fn backup_status(restores_root: &Path, target_id: &str) -> Result<(String, u
 mod tests {
     use super::*;
     use crate::runtime::Runtime;
+
+    #[test]
+    fn manifest_without_sections_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join(MANIFEST_FILE),
+            br#"{"format_version":1,"kind":"avrora-vault","database_id":"main","checkpoint_sequence":3,"created_at":"t"}"#,
+        )
+        .unwrap();
+        let m = load_manifest(dir.path()).unwrap();
+        assert!(m.sections.is_empty());
+        assert_eq!(m.checkpoint_sequence, 3);
+    }
 
     #[tokio::test]
     async fn create_list_verify_roundtrip() {

@@ -389,7 +389,7 @@ fn vault_status_reflects_runtime_state() {
     )
     .unwrap();
     match expect_ok_control(status).unwrap() {
-        ControlResponse::VaultStatus { state: st } => assert_eq!(st, VaultStateWire::Locked),
+        ControlResponse::VaultStatus { state: st, .. } => assert_eq!(st, VaultStateWire::Locked),
         other => panic!("{other:?}"),
     }
     vault_unlock_wire(&mut state, 3, &session_id, &binding, &master);
@@ -406,7 +406,7 @@ fn vault_status_reflects_runtime_state() {
     )
     .unwrap();
     match expect_ok_control(status).unwrap() {
-        ControlResponse::VaultStatus { state: st } => assert_eq!(st, VaultStateWire::Unlocked),
+        ControlResponse::VaultStatus { state: st, .. } => assert_eq!(st, VaultStateWire::Unlocked),
         other => panic!("{other:?}"),
     }
 }

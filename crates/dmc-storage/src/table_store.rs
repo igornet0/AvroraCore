@@ -1,17 +1,27 @@
+use std::sync::Arc;
+
 use dmc_model::{ColumnId, RowId, SnapshotSequence, TableId};
+use dmc_vault::StorageCipher;
 
 use crate::codec::{StoredValue, TableSchema};
 use crate::error::{Error, Result};
-use crate::manifest::{publish_manifest, read_manifest, StorageManifest, table_dir};
+use crate::manifest::{
+    publish_manifest_with, read_manifest, read_manifest_with, table_dir, StorageManifest,
+    SEALED_MANIFEST_FILE,
+};
 use crate::row_store::RowStore;
 use crate::scanner::TableScanner;
-use crate::segment::DEFAULT_MAX_SEGMENT_BYTES;
+use crate::segment::{SegmentSeal, DEFAULT_MAX_SEGMENT_BYTES};
 
 /// Durable table storage: schema + append-only row store + manifest.
 pub struct TableStore {
     table_id: TableId,
     row_store: RowStore,
     max_segment_bytes: u64,
+    /// Storage keys when row segments are sealed (D4-A stage 4.3); kept for reopen.
+    cipher: Option<Arc<StorageCipher>>,
+    /// Generation of the last published (or opened) manifest (D4-B freshness).
+    generation: u64,
 }
 
 impl TableStore {
@@ -29,15 +39,34 @@ impl TableStore {
         schema: TableSchema,
         max_segment_bytes: u64,
     ) -> Result<Self> {
+        Self::create_with_cipher(root, table_id, schema, max_segment_bytes, None)
+    }
+
+    /// Like [`Self::create_with_segment_limit`]; with `cipher`, every row record is sealed
+    /// and bound to this table, its segment and offset.
+    pub fn create_with_cipher(
+        root: impl AsRef<std::path::Path>,
+        table_id: TableId,
+        schema: TableSchema,
+        max_segment_bytes: u64,
+        cipher: Option<Arc<StorageCipher>>,
+    ) -> Result<Self> {
         let table_root = table_dir(root.as_ref(), table_id);
-        if read_manifest(&table_root)?.is_some() {
+        if read_manifest(&table_root)?.is_some() || table_root.join(SEALED_MANIFEST_FILE).exists() {
             return Err(Error::Manifest("table already exists".into()));
         }
-        let row_store = RowStore::create(&table_root, schema.clone(), max_segment_bytes)?;
+        let row_store = RowStore::create_with(
+            &table_root,
+            schema.clone(),
+            max_segment_bytes,
+            seal_for(&cipher, table_id),
+        )?;
         let mut store = Self {
             table_id,
             row_store,
             max_segment_bytes,
+            cipher,
+            generation: 0,
         };
         store.publish()?;
         Ok(store)
@@ -52,17 +81,64 @@ impl TableStore {
         table_id: TableId,
         max_segment_bytes: u64,
     ) -> Result<Self> {
+        Self::open_with_cipher(root, table_id, max_segment_bytes, None)
+    }
+
+    /// Opens a table whose segments are sealed (`cipher`) or plaintext (`None`). Sealed
+    /// segments without keys, and plaintext segments with keys, are refused.
+    pub fn open_with_cipher(
+        root: impl AsRef<std::path::Path>,
+        table_id: TableId,
+        max_segment_bytes: u64,
+        cipher: Option<Arc<StorageCipher>>,
+    ) -> Result<Self> {
         let table_root = table_dir(root.as_ref(), table_id);
-        let manifest = read_manifest(&table_root)?.ok_or(Error::TableNotFound)?;
+        let manifest = read_manifest_with(&table_root, table_id, cipher.as_deref())?
+            .ok_or(Error::TableNotFound)?;
         if manifest.table_id() != table_id {
             return Err(Error::Manifest("table id mismatch".into()));
         }
-        let row_store = RowStore::open(&table_root, max_segment_bytes)?;
+        if cipher.is_some() {
+            // D4-B: every published segment present and not shorter than published
+            // (segments are append-only; a shorter file is truncation or rollback)
+            let segments = table_root.join(crate::manifest::SEGMENTS_DIR);
+            for seg in &manifest.segments {
+                let len = std::fs::metadata(crate::segment::segment_path(&segments, seg.segment_id))
+                    .map(|m| m.len())
+                    .ok();
+                if len.is_none_or(|l| l < seg.byte_size) {
+                    return Err(Error::Corrupt(format!(
+                        "table {}: segment {} missing or shorter than published \
+                         (truncation or rollback)",
+                        table_id.raw(),
+                        seg.segment_id
+                    )));
+                }
+            }
+        }
+        let row_store = RowStore::open_with_manifest(
+            &table_root,
+            &manifest,
+            max_segment_bytes,
+            seal_for(&cipher, table_id),
+        )?;
         Ok(Self {
             table_id,
             row_store,
             max_segment_bytes,
+            cipher,
+            generation: manifest.generation,
         })
+    }
+
+    /// Whether row segments are sealed.
+    pub fn is_encrypted(&self) -> bool {
+        self.row_store.is_sealed()
+    }
+
+    /// Generation of the store's current (authenticated, with keys) manifest.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub fn table_id(&self) -> TableId {
@@ -99,7 +175,8 @@ impl TableStore {
         let max_segment_bytes = self.max_segment_bytes;
         let root = self.row_store.table_root().to_path_buf();
         let parent = root.parent().expect("table root parent");
-        *self = Self::open_with_segment_limit(parent, table_id, max_segment_bytes)?;
+        let cipher = self.cipher.clone();
+        *self = Self::open_with_cipher(parent, table_id, max_segment_bytes, cipher)?;
         Ok(())
     }
 
@@ -241,17 +318,38 @@ impl TableStore {
     }
 
     fn publish(&mut self) -> Result<()> {
-        let mut manifest = read_manifest(self.row_store.table_root())?
-            .unwrap_or_else(|| StorageManifest::new(self.table_id, self.schema().clone()));
+        let mut manifest = read_manifest_with(
+            self.row_store.table_root(),
+            self.table_id,
+            self.cipher.as_deref(),
+        )?
+        .unwrap_or_else(|| StorageManifest::new(self.table_id, self.schema().clone()));
         manifest.schema = self.schema().clone();
         manifest.next_row_id = self.row_store.next_row_id().raw();
         manifest.segments = self.row_store.segment_manifests();
         manifest.segments.sort_by_key(|s| s.segment_id);
         manifest.bump_generation();
-        publish_manifest(self.row_store.table_root(), &manifest)
+        publish_manifest_with(self.row_store.table_root(), &manifest, self.cipher.as_deref())?;
+        self.generation = manifest.generation;
+        Ok(())
     }
 
     pub fn table_root(&self) -> &std::path::Path {
         self.row_store.table_root()
     }
+}
+
+fn seal_for(cipher: &Option<Arc<StorageCipher>>, table_id: TableId) -> Option<SegmentSeal> {
+    cipher
+        .as_ref()
+        .map(|c| SegmentSeal::new(c.clone(), table_id.raw()))
+}
+
+/// D4-B: generation of a table's authenticated manifest (`None`: no such table).
+pub fn sealed_table_generation(
+    root: &std::path::Path,
+    table_id: TableId,
+    cipher: &StorageCipher,
+) -> Result<Option<u64>> {
+    Ok(read_manifest_with(&table_dir(root, table_id), table_id, Some(cipher))?.map(|m| m.generation))
 }

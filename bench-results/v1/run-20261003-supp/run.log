@@ -1,0 +1,52 @@
+== env
+{
+  "build_profile": "release",
+  "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
+  "cpu": "Apple M4",
+  "cpu_cores_eff": "6",
+  "cpu_cores_logical": "10",
+  "cpu_cores_perf": "4",
+  "disk": [
+    "File System Personality:   APFS",
+    "Container Free Space:      47.8 GB (47836782592 Bytes) (exactly 93431216 512-Byte-Units)",
+    "Solid State:               Yes"
+  ],
+  "ephemeral_ports": "49152-65535",
+  "extra": {
+    "nofile_limit": 61440
+  },
+  "git_commit": "0ec23fb0bcd8f86a3784dc2de22496057a4f0ee9",
+  "git_dirty": true,
+  "kern_maxfilesperproc": "61440",
+  "kernel": "Darwin smarthome.lan 25.2.0 Darwin Kernel Version 25.2.0: Tue Nov 18 21:08:48 PST 2025; root:xnu-12377.61.12~1/RELEASE_ARM64_T8132 arm64",
+  "maxprocperuid": "2666",
+  "os": "macOS 26.2 (25C56)",
+  "postgres": "postgres (PostgreSQL) 14.17 (Homebrew)",
+  "ram_bytes": "17179869184",
+  "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+  "somaxconn": "128",
+  "timestamp_utc": "2026-10-03T08:54:58.348598+00:00"
+}
+== exit=0
+== --warmup 5 --measure 15 pg --connections --max-conns 1000
+["connections"] "postgres_default_tcp" "ramp_step" {"connections":10,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=163782.73 MB/s=null p50=58.88us p99=126.88us err=0
+["connections"] "postgres_default_tcp" "ramp_step" {"connections":50,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=204003.8 MB/s=null p50=226.83us p99=680.5us err=0
+["connections"] "postgres_default_tcp" "ramp_step" {"connections":100,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=202428.33 MB/s=null p50=463.67us p99=1400.29us err=0
+["connections"] "postgres_default_tcp" "ramp_step" {"connections":250,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=190222.93 MB/s=null p50=1143.5us p99=4375.0us err=0
+["connections"] "postgres_default_tcp" "ramp_step" {"connections":500,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=171613.67 MB/s=null p50=2251.46us p99=13276.88us err=0
+["connections"] "postgres_default_tcp" "ramp_step" {"connections":1000,"max_concurrent_handshakes":256,"timing":{"measure_s":15.0,"warmup_s":5.0}} ops/s=160225.2 MB/s=null p50=4464.67us p99=34158.25us err=0
+== exit=0
+== --warmup 5 --measure 30 trigger --size 1024
+["trigger"] "avrora_runtime_inproc" "0_triggers_1_writers" {"size":1024,"timing":{"measure_s":30.0,"warmup_s":5.0},"triggers":0,"writers":1} ops/s=82.3 MB/s=0.08 p50=12029.54us p99=14902.88us err=0
+["trigger"] "avrora_runtime_inproc" "1_triggers_1_writers" {"size":1024,"timing":{"measure_s":30.0,"warmup_s":5.0},"triggers":1,"writers":1} ops/s=81.13 MB/s=0.08 p50=12081.83us p99=14126.79us err=0
+["trigger"] "avrora_runtime_inproc" "5_triggers_1_writers" {"size":1024,"timing":{"measure_s":30.0,"warmup_s":5.0},"triggers":5,"writers":1} ops/s=81.83 MB/s=0.08 p50=12058.13us p99=14190.38us err=0
+["trigger"] "avrora_runtime_inproc" "0_triggers_8_writers" {"size":1024,"timing":{"measure_s":30.0,"warmup_s":5.0},"triggers":0,"writers":8} ops/s=80.53 MB/s=0.08 p50=99893.88us p99=114929.08us err=0
+["trigger"] "avrora_runtime_inproc" "1_triggers_8_writers" {"size":1024,"timing":{"measure_s":30.0,"warmup_s":5.0},"triggers":1,"writers":8} ops/s=80.43 MB/s=0.08 p50=99860.5us p99=111031.04us err=0
+["trigger"] "avrora_runtime_inproc" "5_triggers_8_writers" {"size":1024,"timing":{"measure_s":30.0,"warmup_s":5.0},"triggers":5,"writers":8} ops/s=80.4 MB/s=0.08 p50=99991.33us p99=111929.04us err=0
+== exit=0
+== --warmup 5 --measure 30 --only 10P_1C channel --size 1024 --drain-timeout 1800
+["channel"] "avrora_runtime_inproc" "10P_1C" {"ack_batch":false,"ack_on_attempt":1,"consumers":1,"never_ack":false,"producers":10,"retry_max_attempts":32,"same_path":false,"size":1024,"target_rate":null,"timing":{"measure_s":30.0,"warmup_s":5.0}} ops/s=70.8 MB/s=0.07 p50=103208732.08us p99=137764898.21us err=0
+== exit=0
+== csv
+== exit=0
+== done

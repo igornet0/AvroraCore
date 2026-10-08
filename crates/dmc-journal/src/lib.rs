@@ -29,9 +29,13 @@ pub mod types;
 pub mod watermark;
 
 pub use error::{Error, Result};
-pub use crash_injection::{set_test_crash_point, CrashPoint};
+pub use crash_injection::{
+    set_test_crash_point, set_test_fail_fsync, set_test_group_sync_delay_ms, CrashPoint,
+};
 pub use codec::set_test_timestamp_ms;
-pub use journal::{set_test_partition_count, set_test_segment_max_bytes, Journal};
+pub use journal::{
+    journal_fsync_count, set_test_partition_count, set_test_segment_max_bytes, GroupSync, Journal,
+};
 pub use retention::{age_trim_through, bytes_trim_through, combine_trim_through};
 pub use compaction::{
     CompactionArtifact, CompactionCandidate, CompactionPolicy, CompactionResult,
@@ -170,6 +174,127 @@ mod tests {
         let r = journal.append(d3, &dek).unwrap();
         journal.sync().unwrap();
         assert!(r.sequence > replayed.last().map(|e| e.sequence).unwrap_or(0));
+    }
+
+    /// Per-commit sync no longer rewrites `journal.meta`; recovery must derive the head from
+    /// segments regardless of whether meta is stale, missing or garbage (crash without close).
+    #[test]
+    fn crash_with_stale_missing_or_corrupt_meta_recovers_all_synced_entries() {
+        for meta_state in ["stale", "missing", "garbage"] {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut journal, mut tree, master) = setup(dir.path());
+            let meta_path = dir.path().join("journal/journal.meta");
+            let (d, dek) = draft(&mut tree, b"p0");
+            journal.append(d, &dek).unwrap();
+            journal.sync().unwrap();
+            let meta_after_first = std::fs::read(&meta_path).unwrap();
+            for i in 1..25u32 {
+                let (d, dek) = draft(&mut tree, format!("p{i}").as_bytes());
+                journal.append(d, &dek).unwrap();
+                journal.sync().unwrap();
+            }
+            // Steady-state commits do not touch meta.
+            assert_eq!(std::fs::read(&meta_path).unwrap(), meta_after_first);
+            match meta_state {
+                "missing" => std::fs::remove_file(&meta_path).unwrap(),
+                "garbage" => std::fs::write(&meta_path, b"{not json").unwrap(),
+                _ => {}
+            }
+            // Simulated crash: no close/flush beyond the acknowledged syncs.
+            std::mem::forget(journal);
+
+            let kek = derive_journal_kek(&master, tree.salt());
+            let mut journal =
+                Journal::open(JournalConfig::new(dir.path().join("journal")), &kek).unwrap();
+            assert_eq!(journal.last_sequence(), 25, "{meta_state}");
+            let replayed = journal.replay(0, &mut tree).unwrap();
+            assert_eq!(replayed.len(), 25, "{meta_state}");
+            for (i, e) in replayed.iter().enumerate() {
+                assert_eq!(e.sequence, i as u64 + 1);
+                assert_eq!(e.payload, format!("p{i}").into_bytes());
+            }
+            let (d, dek) = draft(&mut tree, b"after");
+            assert_eq!(
+                journal.append(d, &dek).unwrap().sequence,
+                26,
+                "{meta_state}"
+            );
+            journal.sync().unwrap();
+        }
+    }
+
+    /// Rotation creates new segment files: topology (meta + dir fsync) must be persisted so a
+    /// crash right after any rotation recovers every synced entry exactly once, in order.
+    #[test]
+    fn crash_after_rotations_recovers_all_synced_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut tree, master) = KeyTree::create_new().unwrap();
+        tree.ensure_node(&KeyPath::parse("company/finance/invoices/1").unwrap())
+            .unwrap();
+        let kek = derive_journal_kek(&master, tree.salt());
+        let config = JournalConfig::new(dir.path().join("journal")).with_segment_max_bytes(2048);
+        let mut journal = Journal::open(config.clone(), &kek).unwrap();
+        for i in 0..60u32 {
+            let (d, dek) = draft(&mut tree, format!("r{i}").as_bytes());
+            journal.append(d, &dek).unwrap();
+            journal.sync().unwrap();
+        }
+        let segments = std::fs::read_dir(dir.path().join("journal"))
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".jnl")
+            })
+            .count();
+        assert!(segments > 2, "expected rotations, got {segments} segments");
+        std::mem::forget(journal);
+
+        let mut journal = Journal::open(config, &kek).unwrap();
+        assert_eq!(journal.last_sequence(), 60);
+        let replayed = journal.replay(0, &mut tree).unwrap();
+        assert_eq!(replayed.len(), 60);
+        for (i, e) in replayed.iter().enumerate() {
+            assert_eq!(e.sequence, i as u64 + 1);
+            assert_eq!(e.payload, format!("r{i}").into_bytes());
+        }
+        let (d, dek) = draft(&mut tree, b"next");
+        assert_eq!(journal.append(d, &dek).unwrap().sequence, 61);
+    }
+
+    /// `scan_segment_after` (reader fast path) == `scan_segment` filtered by sequence, for
+    /// every start position, including a corrupt tail (same stop point).
+    #[test]
+    fn scan_segment_after_matches_full_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut journal, mut tree, _) = setup(dir.path());
+        for i in 0..20u32 {
+            let (d, dek) = draft(&mut tree, format!("s{i}").as_bytes());
+            journal.append(d, &dek).unwrap();
+            journal.sync().unwrap();
+        }
+        let seg = dir.path().join("journal/seg-000000000001.jnl");
+        let mut bytes = std::fs::read(&seg).unwrap();
+        for corrupt in [false, true] {
+            if corrupt {
+                let n = bytes.len();
+                bytes[n - 10] ^= 0xff; // last record fails CRC → both scans stop before it
+            }
+            let (_, all, _) = codec::scan_segment(&bytes).unwrap();
+            for from in 0..=22u64 {
+                let fast = codec::scan_segment_after(&bytes, from).unwrap();
+                let expected: Vec<u64> =
+                    all.iter().map(|e| e.sequence).filter(|s| *s > from).collect();
+                let got: Vec<u64> = fast.iter().map(|e| e.sequence).collect();
+                assert_eq!(got, expected, "from={from} corrupt={corrupt}");
+                for (a, b) in fast.iter().zip(all.iter().filter(|e| e.sequence > from)) {
+                    assert_eq!(a.ciphertext, b.ciphertext);
+                    assert_eq!(a.path, b.path);
+                }
+            }
+        }
     }
 
     #[test]

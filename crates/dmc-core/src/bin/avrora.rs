@@ -118,6 +118,12 @@ enum BackupCmd {
         id: String,
         #[arg(long)]
         include_rowstore: bool,
+        /// Destinations, comma separated (`local`, BackupSAS target ids)
+        #[arg(long, value_delimiter = ',')]
+        targets: Vec<String>,
+        /// Sections, comma separated (base,journal,runtime)
+        #[arg(long, value_delimiter = ',')]
+        sections: Vec<String>,
     },
     Verify { id: String },
     List,
@@ -125,7 +131,44 @@ enum BackupCmd {
         id: String,
         #[arg(long)]
         target: String,
+        /// Restore from this location (`local` or a BackupSAS target id)
+        #[arg(long)]
+        from: Option<String>,
+        /// Disaster recovery: derive the data key from the Master Key (hex file,
+        /// or `-` for stdin) instead of an unlocked vault
+        #[arg(long)]
+        master_key_file: Option<PathBuf>,
     },
+    /// Write a disaster-recovery kit (identity sealed by the Master Key,
+    /// vault salt, targets, catalog). Never contains the Master Key.
+    ExportKit {
+        #[arg(long)]
+        out: PathBuf,
+        /// Master Key hex file (or `-` for stdin) when the vault is not
+        /// unlocked in this process
+        #[arg(long)]
+        master_key_file: Option<PathBuf>,
+    },
+    /// Import a recovery kit on a new host (requires the Master Key)
+    ImportKit {
+        #[arg(long)]
+        kit: PathBuf,
+        /// Master Key hex file, or `-` for stdin
+        #[arg(long)]
+        master_key_file: PathBuf,
+        /// Replace an existing identity/targets
+        #[arg(long)]
+        force: bool,
+    },
+    /// Manage backup destinations (BackupSAS nodes)
+    Target {
+        #[command(subcommand)]
+        cmd: BackupTargetCmd,
+    },
+    /// Show every backup and where it is stored
+    Catalog,
+    /// Pull relocation notices from BackupSAS nodes and update locations
+    Sync,
     Recover {
         #[arg(long)]
         target: String,
@@ -150,6 +193,43 @@ enum BackupScheduleCmd {
         enabled: Option<bool>,
         #[arg(long)]
         id_prefix: Option<String>,
+        /// ISO weekdays 1..7, comma separated (empty string = every day)
+        #[arg(long)]
+        weekdays: Option<String>,
+        /// Destinations, comma separated
+        #[arg(long, value_delimiter = ',')]
+        targets: Option<Vec<String>>,
+        /// Sections, comma separated (base,journal,runtime)
+        #[arg(long, value_delimiter = ',')]
+        sections: Option<Vec<String>>,
+        /// Keep newest N scheduled backups per target (0 = keep all)
+        #[arg(long)]
+        retention_keep: Option<u32>,
+    },
+}
+
+#[derive(Subcommand)]
+enum BackupTargetCmd {
+    /// Import a BackupSAS node from its connect JSON and enroll
+    Add {
+        id: String,
+        /// File with the node's public connect JSON
+        #[arg(long)]
+        connect: PathBuf,
+        /// One-time enrollment secret from the node operator (`-` reads stdin)
+        #[arg(long)]
+        secret: String,
+        /// Repository on the node (default: first offered)
+        #[arg(long)]
+        repository: Option<String>,
+    },
+    List,
+    Remove {
+        id: String,
+    },
+    /// Connect and list backups stored on the node
+    Test {
+        id: String,
     },
 }
 
@@ -321,10 +401,39 @@ async fn cmd_backup(cmd: BackupCmd) {
     let paths = AvroraPaths::resolve();
     let rt = Runtime::at_path(&paths.db_path);
     match cmd {
-        BackupCmd::Create { id, include_rowstore } => {
-            match dmc_core::backup::create_backup(&rt, &id, include_rowstore).await {
-                Ok((backup_id, seq)) => {
-                    println!("backup_id={backup_id} checkpoint_sequence={seq}");
+        BackupCmd::Create {
+            id,
+            include_rowstore: _,
+            targets,
+            sections,
+        } => {
+            let layout = dmc_journal::StorageLayout::from_db_path(&rt.db_path().await);
+            let root = dmc_core::backup::backups_root(&layout.data_dir);
+            let targets = if targets.is_empty() {
+                control::backup_config::default_targets()
+            } else {
+                targets
+            };
+            let sections = if sections.is_empty() {
+                control::backup_config::default_sections()
+            } else {
+                sections
+            };
+            match dmc_core::backup::remote::run_backup(
+                &rt,
+                &paths.control_dir,
+                &root,
+                &id,
+                &targets,
+                &sections,
+            )
+            .await
+            {
+                Ok(report) => {
+                    println!("{}", report.summary());
+                    if !report.all_ok() {
+                        std::process::exit(2);
+                    }
                 }
                 Err(e) => {
                     eprintln!("avrora backup create: {e}");
@@ -361,14 +470,44 @@ async fn cmd_backup(cmd: BackupCmd) {
                 Err(e) => fail_backup(e),
             }
         }
-        BackupCmd::Restore { id, target } => {
+        BackupCmd::Restore {
+            id,
+            target,
+            from,
+            master_key_file,
+        } => {
             let layout = dmc_journal::StorageLayout::from_db_path(&rt.db_path().await);
             let backups = dmc_core::backup::backups_root(&layout.data_dir);
             let restores = dmc_core::backup::restores_root(&layout.data_dir);
-            match dmc_core::backup::restore_backup(&backups, &restores, &id, &target) {
+            let keys = match master_key_file {
+                Some(f) => offline_keys(&paths.control_dir, &paths.db_path, &f),
+                None => dmc_core::backup::keys::KeySource::Runtime(&rt),
+            };
+            match dmc_core::backup::remote::fetch_backup(
+                &keys,
+                &paths.control_dir,
+                &backups,
+                &restores,
+                &id,
+                &target,
+                from.as_deref(),
+            )
+            .await
+            {
                 Ok((bid, tid, seq)) => {
                     println!("backup_id={bid} target_id={tid} checkpoint_sequence={seq}");
                 }
+                Err(e) => fail_backup(e),
+            }
+        }
+        BackupCmd::Recover { target } if rt.status().await == DbStatus::Empty => {
+            let layout = dmc_journal::StorageLayout::from_db_path(&rt.db_path().await);
+            let restores = dmc_core::backup::restores_root(&layout.data_dir);
+            match dmc_core::backup::recover_into_empty(&rt, &restores, &target).await {
+                Ok((tid, seq)) => println!(
+                    "disaster recovery: installed target={tid} checkpoint_sequence={seq}; \
+                     start the server and unlock with the original Master Key"
+                ),
                 Err(e) => fail_backup(e),
             }
         }
@@ -404,7 +543,283 @@ async fn cmd_backup(cmd: BackupCmd) {
                 time,
                 enabled,
                 id_prefix,
-            } => cmd_backup_schedule_set(time, enabled, id_prefix),
+                weekdays,
+                targets,
+                sections,
+                retention_keep,
+            } => cmd_backup_schedule_set(BackupScheduleUpdate {
+                time,
+                enabled,
+                id_prefix,
+                weekdays,
+                targets,
+                sections,
+                retention_keep,
+            }),
+        },
+        BackupCmd::Target { cmd } => cmd_backup_target(&paths.control_dir, cmd).await,
+        BackupCmd::ExportKit {
+            out,
+            master_key_file,
+        } => {
+            use dmc_core::backup::{keys::KeySource, kit};
+            let keys = match master_key_file {
+                Some(f) => offline_keys(&paths.control_dir, &paths.db_path, &f),
+                None if rt.status().await == DbStatus::Unlocked => KeySource::Runtime(&rt),
+                None => {
+                    eprintln!(
+                        "avrora backup export-kit: vault is not unlocked in this process; \
+                         pass --master-key-file (or use POST /api/backup/export-kit on the running server)"
+                    );
+                    std::process::exit(1);
+                }
+            };
+            match kit::export_kit(&keys, &paths.control_dir, &paths.db_path).await {
+                Ok(k) => match kit::write_kit(&out, &k) {
+                    Ok(()) => println!(
+                        "wrote {} (identity {}, {} target(s), {} catalogued backup(s)); \
+                         keep it with the Master Key recovery material",
+                        out.display(),
+                        k.identity.id,
+                        k.targets.targets.len(),
+                        k.catalog.entries.len()
+                    ),
+                    Err(e) => fail_backup(e),
+                },
+                Err(e) => fail_backup(e),
+            }
+        }
+        BackupCmd::ImportKit {
+            kit: kit_path,
+            master_key_file,
+            force,
+        } => {
+            use dmc_core::backup::kit;
+            let master = read_master(&master_key_file);
+            let result = kit::read_kit(&kit_path)
+                .and_then(|k| kit::import_kit(&paths.control_dir, &k, &master, force));
+            match result {
+                Ok(r) => {
+                    println!(
+                        "imported identity {} targets={} catalog_entries={}{}",
+                        r.identity,
+                        r.targets.join(","),
+                        r.catalog_entries,
+                        if r.wrote_backup_config {
+                            " (backup.json written, schedule disabled)"
+                        } else {
+                            ""
+                        }
+                    );
+                    println!(
+                        "next: avrora backup restore <backup_id> --target <restore_id> --from <target> --master-key-file <file>"
+                    );
+                }
+                Err(e) => fail_backup(e),
+            }
+        }
+        BackupCmd::Catalog => match control::backup_catalog::load(&paths.control_dir) {
+            Ok(catalog) => {
+                if catalog.entries.is_empty() {
+                    println!("catalog is empty");
+                }
+                for e in catalog.entries {
+                    let locs: Vec<String> = e
+                        .locations
+                        .iter()
+                        .map(|l| match &l.remote_backup_id {
+                            Some(r) => format!("{}:{r}", l.target_id),
+                            None => l.target_id.clone(),
+                        })
+                        .collect();
+                    println!(
+                        "{} seq={} created={} sections={} locations={}",
+                        e.backup_id,
+                        e.checkpoint_sequence,
+                        e.created_at,
+                        e.sections.join(","),
+                        locs.join(" ")
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("avrora backup catalog: {e}");
+                std::process::exit(1);
+            }
+        },
+        BackupCmd::Sync => {
+            match dmc_core::backup::remote::sync_relocations(&paths.control_dir).await {
+                Ok(report) => {
+                    println!(
+                        "applied={} new_targets={:?} updated_backups={:?}",
+                        report.applied.len(),
+                        report.new_targets,
+                        report.updated_backups
+                    );
+                    for e in &report.errors {
+                        eprintln!("error: {e}");
+                    }
+                    if !report.errors.is_empty() {
+                        std::process::exit(2);
+                    }
+                }
+                Err(e) => fail_backup(e),
+            }
+        }
+    }
+}
+
+/// Read a Master Key (hex) from a file or stdin (`-`). Never echoed.
+fn read_master(path: &std::path::Path) -> dmc_vault::KeyMaterial {
+    use std::io::Read;
+    let mut text = zeroize::Zeroizing::new(String::new());
+    let res = if path == std::path::Path::new("-") {
+        std::io::stdin().read_to_string(&mut text).map(|_| ())
+    } else {
+        std::fs::File::open(path).and_then(|mut f| f.read_to_string(&mut text).map(|_| ()))
+    };
+    if let Err(e) = res {
+        eprintln!(
+            "avrora backup: cannot read master key from {}: {e}",
+            path.display()
+        );
+        std::process::exit(1);
+    }
+    match dmc_core::backup::keys::parse_master_hex(&text) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("avrora backup: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Offline key source: Master Key + vault salt from the local vault, or from
+/// an imported recovery kit on a host without a vault.
+fn offline_keys(
+    control_dir: &std::path::Path,
+    db_path: &std::path::Path,
+    master_file: &std::path::Path,
+) -> dmc_core::backup::keys::KeySource<'static> {
+    let master = read_master(master_file);
+    let salt = dmc_core::backup::keys::vault_salt(db_path)
+        .ok()
+        .or_else(|| {
+            dmc_core::backup::kit::imported_salt(control_dir)
+                .ok()
+                .flatten()
+        });
+    let Some(salt) = salt else {
+        eprintln!(
+            "avrora backup: no vault here and no imported recovery kit (run `avrora backup import-kit`)"
+        );
+        std::process::exit(1);
+    };
+    dmc_core::backup::keys::KeySource::Offline { master, salt }
+}
+
+/// `-` reads a secret from stdin so it never appears in argv / shell history.
+fn read_secret_arg(value: String) -> zeroize::Zeroizing<String> {
+    if value != "-" {
+        return zeroize::Zeroizing::new(value);
+    }
+    let mut line = zeroize::Zeroizing::new(String::new());
+    if let Err(e) = std::io::stdin().read_line(&mut line) {
+        eprintln!("avrora backup: cannot read secret from stdin: {e}");
+        std::process::exit(1);
+    }
+    zeroize::Zeroizing::new(line.trim().to_string())
+}
+
+async fn cmd_backup_target(control_dir: &std::path::Path, cmd: BackupTargetCmd) {
+    use dmc_core::backup::remote;
+    use dmc_core::control::backup_targets;
+    match cmd {
+        BackupTargetCmd::Add {
+            id,
+            connect,
+            secret,
+            repository,
+        } => {
+            let descriptor = match std::fs::read_to_string(&connect)
+                .map_err(|e| e.to_string())
+                .and_then(|t| {
+                    backupsas_core::ConnectDescriptor::from_json(&t).map_err(|e| e.to_string())
+                }) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("avrora backup target add: {}: {e}", connect.display());
+                    std::process::exit(1);
+                }
+            };
+            let Some(repository) = repository.or_else(|| descriptor.repositories.first().cloned())
+            else {
+                eprintln!("avrora backup target add: node offers no repository");
+                std::process::exit(1);
+            };
+            let secret = read_secret_arg(secret);
+            match remote::add_remote_target(control_dir, &id, descriptor, &repository, &secret)
+                .await
+            {
+                Ok(t) => println!(
+                    "added target {} server={} repository={repository}",
+                    t.id,
+                    t.server_id().map(|s| s.to_string()).unwrap_or_default()
+                ),
+                Err(e) => fail_backup(e),
+            }
+        }
+        BackupTargetCmd::List => match backup_targets::load(control_dir) {
+            Ok(targets) => {
+                for t in targets.all() {
+                    match &t.kind {
+                        backup_targets::TargetKind::Local => println!("{} local", t.id),
+                        backup_targets::TargetKind::Backupsas {
+                            descriptor,
+                            repository,
+                        } => println!(
+                            "{} backupsas server={} fingerprint={} endpoints={} repository={}{}",
+                            t.id,
+                            descriptor.server_id,
+                            descriptor.fingerprint,
+                            descriptor.endpoints.join(","),
+                            repository,
+                            t.relocated_from
+                                .as_deref()
+                                .map(|r| format!(" relocated_from={r}"))
+                                .unwrap_or_default()
+                        ),
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("avrora backup target list: {e}");
+                std::process::exit(1);
+            }
+        },
+        BackupTargetCmd::Remove { id } => match remote::remove_target(control_dir, &id) {
+            Ok(t) => println!("removed target {}", t.id),
+            Err(e) => fail_backup(e),
+        },
+        BackupTargetCmd::Test { id } => match remote::list_remote(control_dir, &id).await {
+            Ok(items) => {
+                println!("target {id}: connected, {} backup(s)", items.len());
+                for i in items {
+                    println!(
+                        "  {} {} size={} committed={}{}",
+                        i.backup_id,
+                        i.state,
+                        i.total_size,
+                        i.committed_at,
+                        if i.relocated {
+                            " (moved away, awaiting sync)"
+                        } else {
+                            ""
+                        }
+                    );
+                }
+            }
+            Err(e) => fail_backup(e),
         },
     }
 }
@@ -428,21 +843,58 @@ fn cmd_backup_schedule_show() {
     }
 }
 
-fn cmd_backup_schedule_set(
+struct BackupScheduleUpdate {
     time: Option<String>,
     enabled: Option<bool>,
     id_prefix: Option<String>,
-) {
+    weekdays: Option<String>,
+    targets: Option<Vec<String>>,
+    sections: Option<Vec<String>>,
+    retention_keep: Option<u32>,
+}
+
+fn cmd_backup_schedule_set(u: BackupScheduleUpdate) {
     let paths = AvroraPaths::resolve();
     let mut cfg = load_backup_config(&paths.control_dir).unwrap_or_default();
-    if let Some(t) = time {
+    if let Some(t) = u.time {
         cfg.schedule.time = t;
     }
-    if let Some(e) = enabled {
+    if let Some(e) = u.enabled {
         cfg.schedule.enabled = e;
     }
-    if let Some(p) = id_prefix {
+    if let Some(p) = u.id_prefix {
         cfg.schedule.id_prefix = p;
+    }
+    if let Some(w) = u.weekdays {
+        let parsed: Result<Vec<u8>, _> = w
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::parse::<u8>)
+            .collect();
+        match parsed {
+            Ok(days) => cfg.schedule.weekdays = days,
+            Err(e) => {
+                eprintln!("avrora backup schedule set: --weekdays: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if let Some(t) = u.targets {
+        let known = control::backup_targets::load(&paths.control_dir).unwrap_or_default();
+        if let Some(bad) = t.iter().find(|id| !known.exists(id)) {
+            eprintln!(
+                "avrora backup schedule set: unknown target `{bad}` (see `avrora backup target list`)"
+            );
+            std::process::exit(1);
+        }
+        cfg.schedule.targets = t;
+    }
+    if let Some(s) = u.sections {
+        cfg.schedule.sections = s;
+    }
+    if let Some(k) = u.retention_keep {
+        cfg.schedule.retention_keep = (k > 0).then_some(k);
     }
     match save_backup_config(&paths.control_dir, &cfg) {
         Ok(path) => {
@@ -460,6 +912,28 @@ fn print_backup_config(cfg: &BackupConfig, path: &std::path::Path) {
     println!("schedule.enabled={}", cfg.schedule.enabled);
     println!("schedule.time={}", cfg.schedule.time);
     println!("schedule.id_prefix={}", cfg.schedule.id_prefix);
+    println!(
+        "schedule.weekdays={}",
+        if cfg.schedule.weekdays.is_empty() {
+            "every day".to_string()
+        } else {
+            cfg.schedule
+                .weekdays
+                .iter()
+                .map(u8::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        }
+    );
+    println!("schedule.targets={}", cfg.schedule.targets.join(","));
+    println!("schedule.sections={}", cfg.schedule.sections.join(","));
+    println!(
+        "schedule.retention_keep={}",
+        cfg.schedule
+            .retention_keep
+            .map(|k| k.to_string())
+            .unwrap_or_else(|| "all".into())
+    );
     println!(
         "schedule.last_run_at={}",
         cfg.schedule.last_run_at.as_deref().unwrap_or("-")

@@ -1,0 +1,58 @@
+# AvroraCore ↔ BackupSAS E2E stand (DEV secrets from docker/env.dev).
+#
+#   make -f Makefile.docker e2e-backupsas        # build, test, tear down
+#   KEEP=1 docker/e2e/run.sh                     # keep the stand running
+#
+# Needs sibling checkouts ../AvroraClient and ../BackupSAS.
+
+name: avrora-backupsas-e2e
+
+services:
+  avrora:
+    image: avrora-core:e2e
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      additional_contexts:
+        client: ../../../AvroraClient
+        backupsas: ../../../BackupSAS
+      args:
+        RUST_VERSION: ${RUST_VERSION:-1.88}
+        NODE_VERSION: ${NODE_VERSION:-22}
+    env_file:
+      - ../env.dev
+    environment:
+      AVRORA_DEV: "1"
+      AVRORA_DEVO_DEMO: "0"
+    ports:
+      - "127.0.0.1:${E2E_HTTP_PORT:-28787}:18787"
+    volumes:
+      - avrora-data:/var/lib/avrora
+    command: ["avrora"]
+
+  bsas1:
+    image: backupsas:e2e
+    build:
+      context: ../../../BackupSAS
+      dockerfile: ../AvroraCore/docker/e2e/Dockerfile.backupsas
+      args:
+        RUST_VERSION: ${RUST_VERSION:-1.88}
+    environment:
+      PUBLIC_ENDPOINT: bsas1:7420
+      RUST_LOG: backupsas=info
+    volumes:
+      - bsas1-data:/data
+
+  bsas2:
+    image: backupsas:e2e
+    depends_on: [bsas1]
+    environment:
+      PUBLIC_ENDPOINT: bsas2:7420
+      RUST_LOG: backupsas=info
+    volumes:
+      - bsas2-data:/data
+
+volumes:
+  avrora-data:
+  bsas1-data:
+  bsas2-data:

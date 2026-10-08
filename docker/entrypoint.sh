@@ -138,14 +138,14 @@ run_avrora() {
 run_sql() {
   # Prefer fixed SQL master from env.dev when set.
   if [ -n "${SQL_MASTER_KEY_HEX:-}" ]; then
-    printf '%s' "$SQL_MASTER_KEY_HEX" >"$SQL_MASTER_KEY"
-    chmod 600 "$SQL_MASTER_KEY" 2>/dev/null || true
+    (umask 077 && printf '%s' "$SQL_MASTER_KEY_HEX" >"$SQL_MASTER_KEY")
+    chmod 600 "$SQL_MASTER_KEY"
   fi
 
   if [ -f "$SQL_DATA" ] && [ -f "$SQL_MASTER_KEY" ]; then
     echo "sql unlock → $SQL_ADDR  data=$SQL_DATA"
     exec dmc-pgwire --data "$SQL_DATA" --listen "$SQL_ADDR" \
-      --unlock "$(cat "$SQL_MASTER_KEY")"
+      --unlock-file "$SQL_MASTER_KEY"
   fi
 
   if [ -f "$SQL_DATA" ]; then
@@ -154,47 +154,17 @@ run_sql() {
   fi
 
   echo "sql create → $SQL_ADDR  data=$SQL_DATA"
-  if [ -n "${SQL_MASTER_KEY_HEX:-}" ]; then
-    echo "using fixed SQL_MASTER_KEY_HEX from env"
+  if [ -f "$SQL_MASTER_KEY" ]; then
+    # fixed SQL_MASTER_KEY_HEX from env was written to the key file above
+    echo "using fixed SQL master key from $SQL_MASTER_KEY"
     exec dmc-pgwire --data "$SQL_DATA" --listen "$SQL_ADDR" \
-      --create --master-hex "$SQL_MASTER_KEY_HEX"
+      --create --master-hex-file "$SQL_MASTER_KEY"
   fi
 
+  # The key is written by dmc-pgwire itself (0600); it is never printed or logged.
   echo "master key will be saved to $SQL_MASTER_KEY"
-  log="$AVRORA_HOME/.sql-create.log"
-  : >"$log"
-  dmc-pgwire --data "$SQL_DATA" --listen "$SQL_ADDR" --create >>"$log" 2>&1 &
-  pid=$!
-
-  i=0
-  while [ "$i" -lt 60 ]; do
-    if ! kill -0 "$pid" 2>/dev/null; then
-      echo "dmc-pgwire exited during create:" >&2
-      cat "$log" >&2
-      exit 1
-    fi
-    key="$(awk '/^master key/{getline; gsub(/\r/,""); print; exit}' "$log" 2>/dev/null || true)"
-    if [ -n "${key:-}" ]; then
-      printf '%s' "$key" >"$SQL_MASTER_KEY"
-      chmod 600 "$SQL_MASTER_KEY" 2>/dev/null || true
-      echo "master key saved to $SQL_MASTER_KEY"
-      break
-    fi
-    i=$((i + 1))
-    sleep 0.5
-  done
-
-  if [ ! -f "$SQL_MASTER_KEY" ]; then
-    echo "timed out waiting for master key; log:" >&2
-    cat "$log" >&2
-    kill "$pid" 2>/dev/null || true
-    exit 1
-  fi
-
-  tail -n +1 -f "$log" &
-  tail_pid=$!
-  trap 'kill "$tail_pid" 2>/dev/null || true' EXIT
-  wait "$pid"
+  exec dmc-pgwire --data "$SQL_DATA" --listen "$SQL_ADDR" \
+    --create --master-key-out "$SQL_MASTER_KEY"
 }
 
 cmd="${1:-avrora}"

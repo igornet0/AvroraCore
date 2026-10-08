@@ -328,6 +328,155 @@ pub enum ControlRequest {
         table: String,
         name: String,
     },
+    // ── CLIENT_OWNED key management (appended: postcard variant indices stay stable) ──
+    //
+    // Every field is public or already wrapped: public keys, HPKE envelopes, subject ids.
+    // There is no message that carries a private key, root, recovery code or plaintext DEK.
+    /// Register the caller's first (version 1) public KEM key.
+    ClientKeyRegister {
+        session_id: String,
+        key: dmc_vault::ownership::ClientPublicKey,
+    },
+    /// Fetch all key versions of a subject (caller recomputes fingerprints; TOFU).
+    ClientKeyGet {
+        session_id: String,
+        subject: dmc_vault::ownership::SubjectId,
+    },
+    /// Register the caller's next key bundle version; previous becomes RETIRED. `proof`
+    /// carries the new auth key's possession signature and the old auth key's continuity
+    /// signature (`dmc_vault::ownership::auth::rotation_statement`).
+    ClientKeyRotate {
+        session_id: String,
+        key: dmc_vault::ownership::ClientPublicKey,
+        proof: dmc_vault::ownership::auth::KeyRotationProof,
+    },
+    /// Store an HPKE envelope created by its owner.
+    KeyEnvelopePut {
+        session_id: String,
+        envelope: dmc_vault::ownership::ClientKeyEnvelope,
+    },
+    /// Envelopes addressed to the caller (own + live delegations).
+    KeyEnvelopeGet {
+        session_id: String,
+    },
+    GrantCreate {
+        session_id: String,
+        grantee: dmc_vault::ownership::SubjectId,
+        #[serde(default)]
+        expires_at_ms: Option<u64>,
+    },
+    GrantList {
+        session_id: String,
+    },
+    GrantRevoke {
+        session_id: String,
+        grantee: dmc_vault::ownership::SubjectId,
+    },
+    /// Declare a BLOB column CLIENT_OWNED: the server then rejects any value that is not a
+    /// well-formed CLIENT-domain sealed record (no decryption involved).
+    SealedColumnDeclare {
+        session_id: String,
+        schema: String,
+        table: String,
+        column: String,
+        #[serde(default)]
+        owner_column: Option<String>,
+    },
+    /// Operator (grant CREATE on system) issues a one-time enrollment invite. The server
+    /// assigns the subject; the token is returned once.
+    IdentityInviteCreate {
+        session_id: String,
+        name: String,
+        tenant: dmc_vault::ownership::TenantId,
+        ttl_ms: u64,
+    },
+    /// Client claims an invite: registers its key bundle (X25519 + Ed25519) and proves
+    /// possession of the Ed25519 key. No session needed; no private key on the wire.
+    IdentityEnroll {
+        invite_id: String,
+        token: Vec<u8>,
+        key: dmc_vault::ownership::ClientPublicKey,
+        signature: Vec<u8>,
+    },
+    /// CLIENT_OWNED authentication, step 1: ask for a challenge bound to this connection.
+    ClientAuthBegin {
+        subject: dmc_vault::ownership::SubjectId,
+        tenant: dmc_vault::ownership::TenantId,
+    },
+    /// Step 2: Ed25519 signature over the challenge; `nonce` identifies it.
+    ClientAuthFinish {
+        nonce: Vec<u8>,
+        signature: Vec<u8>,
+    },
+    /// Grant a privilege to another identity (caller needs GRANT on system; never self).
+    /// DMC IPC only — not forwarded by the HTTP / control-plane adapters.
+    PrivilegeGrant {
+        session_id: String,
+        grantee: String,
+        privilege: PrivilegeWire,
+    },
+    PrivilegeRevoke {
+        session_id: String,
+        grantee: String,
+        privilege: PrivilegeWire,
+    },
+    /// Privileges of `identity` (GRANT holders: anyone; others: only themselves).
+    PrivilegeList {
+        session_id: String,
+        identity: String,
+    },
+    /// D4-A stage 5 — explicit migration of a plaintext (pre-D4) SQL store to encrypted
+    /// storage. The storage keys come exactly as for `VaultUnlock` (client-side KeyPass →
+    /// unlock blob bound to this session); the caller needs GRANT on system. On success
+    /// the vault is unlocked and the encrypted store is open. Plaintext backups / restore
+    /// targets are refused unless `purge_plaintext_backups` (they are then deleted).
+    /// DMC IPC only — not forwarded by the HTTP / control-plane adapters.
+    StorageMigrateEncrypt {
+        session_id: String,
+        blob: crate::unlock_blob::UnlockBlob,
+        #[serde(default)]
+        purge_plaintext_backups: bool,
+    },
+}
+
+/// Resource of a privilege on the wire (mirrors `dmc_security::auth::Resource`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PrivilegeResourceWire {
+    System,
+    Database { name: String },
+    Schema { database: String, name: String },
+    Table { database: String, schema: String, name: String },
+}
+
+/// Action of a privilege on the wire (mirrors `dmc_security::auth::Action`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PrivilegeActionWire {
+    Connect,
+    Usage,
+    Select,
+    Insert,
+    Update,
+    Delete,
+    Create,
+    Drop,
+    Grant,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrivilegeWire {
+    pub resource: PrivilegeResourceWire,
+    pub action: PrivilegeActionWire,
+}
+
+/// Delegation grant as seen on the wire.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientGrantWire {
+    pub owner: dmc_vault::ownership::SubjectId,
+    pub grantee: dmc_vault::ownership::SubjectId,
+    pub tenant: dmc_vault::ownership::TenantId,
+    pub granted_at_ms: u64,
+    #[serde(default)]
+    pub expires_at_ms: Option<u64>,
 }
 
 fn default_event_limit() -> u32 {
@@ -401,9 +550,15 @@ pub enum ControlResponse {
     Diagnostics(DiagnosticsWire),
     VaultStatus {
         state: VaultStateWire,
+        /// D4-D: generation of the open SQL storage (journal tip); 0 while sealed.
+        #[serde(default)]
+        generation: u64,
     },
     VaultUnlock {
         state: VaultStateWire,
+        /// D4-D: generation of the storage just opened — the client's next anchor.
+        #[serde(default)]
+        generation: u64,
     },
     VaultLock {
         state: VaultStateWire,
@@ -414,6 +569,11 @@ pub enum ControlResponse {
     BackupCreate {
         backup_id: String,
         checkpoint_sequence: u64,
+        /// D4-E: SHA-256 (hex) of the backup's authenticated `manifest.sealed` — what the
+        /// client stores to authorize an emergency restore of exactly this artifact.
+        /// Empty for an unencrypted backup.
+        #[serde(default)]
+        manifest_sealed_sha256: String,
     },
     BackupVerify {
         backup_id: String,
@@ -513,6 +673,63 @@ pub enum ControlResponse {
     },
     SchemaMutation(crate::runtime::SchemaMutationResultWire),
     RuntimeOk,
+    // ── CLIENT_OWNED key management (appended) ──
+    ClientKeyAck {
+        key_id: String,
+        key_version: u32,
+    },
+    ClientKeys {
+        keys: Vec<dmc_vault::ownership::ServerStoredPublicKey>,
+    },
+    KeyEnvelopeAck,
+    KeyEnvelopes {
+        envelopes: Vec<dmc_vault::ownership::ClientKeyEnvelope>,
+    },
+    Grants {
+        grants: Vec<ClientGrantWire>,
+    },
+    GrantAck {
+        changed: bool,
+    },
+    SealedColumnAck,
+    /// Invite issued: `token` is shown to the operator once (not stored by the server).
+    IdentityInvite {
+        invite_id: String,
+        token: Vec<u8>,
+        name: String,
+        tenant: dmc_vault::ownership::TenantId,
+        subject: dmc_vault::ownership::SubjectId,
+        expires_at_ms: u64,
+    },
+    IdentityEnrolled {
+        identity_id: String,
+        subject: dmc_vault::ownership::SubjectId,
+        key_id: String,
+    },
+    /// Challenge bytes (`dmc_vault::ownership::auth::Challenge`) to be signed.
+    ClientAuthChallenge {
+        challenge: Vec<u8>,
+    },
+    /// Session bound to this connection; carries no key material.
+    ClientAuthOk {
+        session_id: String,
+        expires_at_ms: u64,
+        key_version: u32,
+    },
+    PrivilegeAck {
+        changed: bool,
+    },
+    Privileges {
+        privileges: Vec<PrivilegeWire>,
+    },
+    StorageMigrateEncrypt {
+        /// Events re-written into the encrypted journal.
+        events: u64,
+        /// Tables re-materialized (encrypted segments, indexes, statistics).
+        tables: u64,
+        /// Plaintext backup / restore artifacts deleted (only with `purge_plaintext_backups`).
+        purged_artifacts: u64,
+    },
 }
 
 /// Opaque backup listing DTO for Control Plane / Tauri (no filesystem paths).
@@ -578,6 +795,10 @@ pub enum DataRequest {
 pub struct SqlCell {
     pub value: String,
     pub is_null: bool,
+    /// Canonical text form (PostgreSQL text output: `apple`, `1`, `t`, `\x…`); empty for
+    /// NULL. `value` keeps its existing form for DMC clients.
+    #[serde(default)]
+    pub text: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

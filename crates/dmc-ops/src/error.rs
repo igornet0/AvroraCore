@@ -86,6 +86,9 @@ pub enum StartupError {
     Lifecycle(String),
     #[error("startup io error: {0}")]
     Io(String),
+    /// Persisted identity directory unreadable, or missing after bootstrap (fail closed).
+    #[error("startup identity directory error: {0}")]
+    Identity(String),
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]

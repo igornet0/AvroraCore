@@ -7,8 +7,8 @@ use crate::codec::{RowRecord, StoredValue, TableSchema};
 use crate::error::{Error, Result};
 use crate::page::{FLAG_DELETED, FLAG_LIVE};
 use crate::segment::{
-    read_row_at, scan_segment_records, segment_path, RowLocation, SegmentWriter,
-    DEFAULT_MAX_SEGMENT_BYTES,
+    read_row_at_with, scan_segment_frames, segment_path, RowLocation, SegmentSeal,
+    SegmentWriter,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,6 +32,8 @@ pub struct RowStore {
     next_row_id: u64,
     max_segment_bytes: u64,
     defer_publish: bool,
+    /// Per-record sealing of segments (D4-A); `None` = plaintext segments (dev/test).
+    seal: Option<SegmentSeal>,
 }
 
 impl RowStore {
@@ -39,6 +41,15 @@ impl RowStore {
         table_root: impl AsRef<Path>,
         schema: TableSchema,
         max_segment_bytes: u64,
+    ) -> Result<Self> {
+        Self::create_with(table_root, schema, max_segment_bytes, None)
+    }
+
+    pub fn create_with(
+        table_root: impl AsRef<Path>,
+        schema: TableSchema,
+        max_segment_bytes: u64,
+        seal: Option<SegmentSeal>,
     ) -> Result<Self> {
         let table_root = table_root.as_ref().to_path_buf();
         let segments_dir = table_root.join(crate::manifest::SEGMENTS_DIR);
@@ -55,15 +66,34 @@ impl RowStore {
             next_row_id: 1,
             max_segment_bytes,
             defer_publish: false,
+            seal,
         };
         store.ensure_active_writer()?;
         Ok(store)
     }
 
     pub fn open(table_root: impl AsRef<Path>, max_segment_bytes: u64) -> Result<Self> {
-        let table_root = table_root.as_ref().to_path_buf();
-        let manifest = crate::manifest::read_manifest(&table_root)?
+        Self::open_with(table_root, max_segment_bytes, None)
+    }
+
+    pub fn open_with(
+        table_root: impl AsRef<Path>,
+        max_segment_bytes: u64,
+        seal: Option<SegmentSeal>,
+    ) -> Result<Self> {
+        let manifest = crate::manifest::read_manifest(table_root.as_ref())?
             .ok_or(Error::TableNotFound)?;
+        Self::open_with_manifest(table_root, &manifest, max_segment_bytes, seal)
+    }
+
+    /// Open from an already verified `manifest` (D4-B: the authenticated one).
+    pub fn open_with_manifest(
+        table_root: impl AsRef<Path>,
+        manifest: &crate::manifest::StorageManifest,
+        max_segment_bytes: u64,
+        seal: Option<SegmentSeal>,
+    ) -> Result<Self> {
+        let table_root = table_root.as_ref().to_path_buf();
         let segments_dir = table_root.join(crate::manifest::SEGMENTS_DIR);
         let mut store = Self {
             table_root,
@@ -85,6 +115,7 @@ impl RowStore {
             next_row_id: manifest.next_row_id,
             max_segment_bytes,
             defer_publish: false,
+            seal,
         };
         store.rebuild_index_from_segments()?;
         store.ensure_active_writer()?;
@@ -191,7 +222,7 @@ impl RowStore {
             Some(m) => m,
             None => return Ok(None),
         };
-        let record = read_row_at(&self.segments_dir, &meta.location)?;
+        let record = read_row_at_with(&self.segments_dir, &meta.location, self.seal.as_ref())?;
         Ok(Some(record.values))
     }
 
@@ -242,7 +273,9 @@ impl RowStore {
             .get(&raw)
             .and_then(|v| self.pick_visible_meta(v, SnapshotSequence::latest()));
         match meta {
-            Some(m) => read_row_at(&self.segments_dir, &m.location).map(Some),
+            Some(m) => {
+                read_row_at_with(&self.segments_dir, &m.location, self.seal.as_ref()).map(Some)
+            }
             None => Ok(None),
         }
     }
@@ -255,7 +288,8 @@ impl RowStore {
                 if meta.deleted {
                     continue;
                 }
-                let record = read_row_at(&self.segments_dir, &meta.location)?;
+                let record =
+                    read_row_at_with(&self.segments_dir, &meta.location, self.seal.as_ref())?;
                 out.push((RowId::new(row_id), record.values));
             }
         }
@@ -270,6 +304,10 @@ impl RowStore {
                 byte_size,
             })
             .collect()
+    }
+
+    pub fn is_sealed(&self) -> bool {
+        self.seal.is_some()
     }
 
     pub fn table_root(&self) -> &Path {
@@ -386,16 +424,18 @@ impl RowStore {
         }
         let path = segment_path(&self.segments_dir, self.active_segment_id);
         let writer = if path.exists() {
-            SegmentWriter::open_append(
+            SegmentWriter::open_append_with(
                 &self.segments_dir,
                 self.active_segment_id,
                 self.max_segment_bytes,
+                self.seal.clone(),
             )?
         } else {
-            SegmentWriter::create(
+            SegmentWriter::create_with(
                 &self.segments_dir,
                 self.active_segment_id,
                 self.max_segment_bytes,
+                self.seal.clone(),
             )?
         };
         self.segment_sizes
@@ -416,18 +456,9 @@ impl RowStore {
         let mut segment_ids: Vec<_> = self.segment_sizes.keys().copied().collect();
         segment_ids.sort_unstable();
         for segment_id in segment_ids {
-            let records = scan_segment_records(&self.segments_dir, segment_id)?;
-            for (offset, record) in records {
+            let records = scan_segment_frames(&self.segments_dir, segment_id, self.seal.as_ref())?;
+            for (offset, len, record) in records {
                 let deleted = record.flags == FLAG_DELETED;
-                let len = crate::codec::encode_record(
-                    record.row_id,
-                    record.flags,
-                    record.begin_sequence,
-                    record.end_sequence,
-                    &record.values,
-                )
-                .map(|b| b.len() as u32)
-                .unwrap_or(0);
                 self.row_versions
                     .entry(record.row_id)
                     .or_default()

@@ -109,12 +109,19 @@ fn auth_unlock(
 #[test]
 fn ready_locked_diagnostics_snapshot() {
     let dir = tempdir().unwrap();
-    let (mut state, _master) = bootstrap_core_state_locked(dir.path(), false);
+    let (mut state, master) = bootstrap_core_state_locked(dir.path(), false);
     let wire = diagnostics(&mut state);
     assert_eq!(wire.liveness, "alive");
     assert_eq!(wire.readiness, "ready");
     assert_eq!(wire.vault, "locked");
     assert_eq!(wire.process_state, "running");
+    // D4-F: locked ⇒ SQL storage not opened ⇒ nothing of the journal is known or reported
+    assert!(state.storage_sealed());
+    assert!(wire.journal_tip.is_none());
+    assert!(wire.materialized_sequence.is_none());
+    assert_eq!(wire.journal_lag, None);
+    let _ = auth_unlock(&mut state, master);
+    let wire = diagnostics(&mut state);
     assert!(wire.journal_tip.is_some());
     assert!(wire.materialized_sequence.is_some());
     assert_eq!(wire.journal_lag, Some(0));
@@ -150,7 +157,8 @@ fn not_ready_locked_when_initializing() {
 #[test]
 fn journal_lag_zero_on_bootstrapped_core() {
     let dir = tempdir().unwrap();
-    let (mut state, _master) = bootstrap_core_state_locked(dir.path(), true);
+    let (mut state, master) = bootstrap_core_state_locked(dir.path(), true);
+    let _ = auth_unlock(&mut state, master); // D4-F: the journal opens on unlock
     let snap = evaluate_diagnostics(&mut state);
     assert_eq!(snap.journal.tip_sequence, snap.materializer.materialized_sequence);
     assert_eq!(snap.materializer.journal_lag, Some(0));
@@ -201,14 +209,17 @@ fn failing_sinks_do_not_break_diagnostics_or_readiness() {
 fn diagnostics_is_read_only_no_sql_side_effects() {
     let dir = tempdir().unwrap();
     let (mut state, master) = bootstrap_core_state_locked(dir.path(), true);
+    let _ = diagnostics(&mut state);
+    let _ = diagnostics(&mut state);
+    // Vault still locked until unlock — diagnostics neither unlocked nor opened storage.
+    assert_eq!(diagnostics(&mut state).vault, "locked");
+    assert!(state.storage_sealed());
+    let _ = auth_unlock(&mut state, master);
+    assert_eq!(diagnostics(&mut state).vault, "unlocked");
     let tip_before = state.ctx.journal().unwrap().tip_sequence();
     let _ = diagnostics(&mut state);
     let _ = diagnostics(&mut state);
     assert_eq!(state.ctx.journal().unwrap().tip_sequence(), tip_before);
-    // Vault still locked until unlock — diagnostics did not unlock.
-    assert_eq!(diagnostics(&mut state).vault, "locked");
-    let _ = auth_unlock(&mut state, master);
-    assert_eq!(diagnostics(&mut state).vault, "unlocked");
 }
 
 #[test]

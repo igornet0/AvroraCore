@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 #
 # AvroraCore DBMS image (avrora + dmc-pgwire).
-# Build via Makefile.docker / compose (needs sibling AvroraClient context).
+# Build via Makefile.docker / compose (needs sibling AvroraClient + BackupSAS contexts).
 
 ARG RUST_VERSION=1.88
 ARG NODE_VERSION=22
@@ -18,9 +18,16 @@ RUN npm run build
 FROM rust:${RUST_VERSION}-bookworm AS builder
 WORKDIR /src
 
-# Default context = AvroraCore; named context `client` = ../AvroraClient
+# Default context = AvroraCore; named contexts `client` = ../AvroraClient,
+# `backupsas` = ../BackupSAS (path dependency of dmc-core).
+# Only manifests + sources are copied from the sibling workspaces so their
+# (multi-GB) target/ directories are never sent to the builder.
 COPY . /src/AvroraCore
-COPY --from=client . /src/AvroraClient
+COPY --from=client Cargo.toml Cargo.lock /src/AvroraClient/
+COPY --from=client crates /src/AvroraClient/crates
+COPY --from=backupsas Cargo.toml Cargo.lock /src/BackupSAS/
+COPY --from=backupsas crates /src/BackupSAS/crates
+COPY --from=backupsas tests /src/BackupSAS/tests
 
 COPY --from=ui /ui/dist /src/AvroraCore/crates/dmc-core/ui/dist
 

@@ -19,7 +19,7 @@ pub fn resolve_ui_access_key(key: Option<&str>) -> Result<String, String> {
     Ok(k.to_string())
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DevoInitResult {
     pub created_vault: bool,
     pub provisioned_identity: bool,
@@ -29,6 +29,21 @@ pub struct DevoInitResult {
     pub ui_access_key: Option<String>,
     pub ui_totp_secret: Option<String>,
     pub ui_credentials_file: Option<PathBuf>,
+}
+
+impl std::fmt::Debug for DevoInitResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DevoInitResult")
+            .field("created_vault", &self.created_vault)
+            .field("provisioned_identity", &self.provisioned_identity)
+            .field("master_hex", &self.master_hex.as_ref().map(|_| "[REDACTED]"))
+            .field("db_id", &self.db_id)
+            .field("master_file", &self.master_file)
+            .field("ui_access_key", &self.ui_access_key.as_ref().map(|_| "[REDACTED]"))
+            .field("ui_totp_secret", &self.ui_totp_secret.as_ref().map(|_| "[REDACTED]"))
+            .field("ui_credentials_file", &self.ui_credentials_file)
+            .finish()
+    }
 }
 
 pub async fn run_devo_init(
@@ -198,13 +213,24 @@ struct DevUiProvision {
     credentials_file: PathBuf,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct UiAuthResetResult {
     pub access_key: String,
     pub totp_secret: String,
     pub otpauth_url: String,
     pub credentials_file: PathBuf,
     pub removed: Vec<PathBuf>,
+}
+
+impl std::fmt::Debug for UiAuthResetResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UiAuthResetResult")
+            .field("access_key", &"[REDACTED]")
+            .field("totp_secret", &"[REDACTED]")
+            .field("credentials_file", &self.credentials_file)
+            .field("removed", &self.removed)
+            .finish()
+    }
 }
 
 /// Remove `*.ui-auth.json` and `.avrora-dev-ui-credentials.txt` next to the vault.
@@ -281,13 +307,8 @@ fn write_dev_ui_credentials_file(path: &Path, creds: &DevUiCredentials) -> Resul
          # Добавьте TOTP в Google Authenticator (QR: otpauth URL), затем войдите в UI.\n",
         creds.access_key, creds.totp_secret, creds.otpauth_url
     );
-    fs::write(path, body).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    let body = zeroize::Zeroizing::new(body);
+    dmc_vault::secure_fs::write_secret_file(path, body.as_bytes()).map_err(|e| e.to_string())
 }
 
 pub fn read_dev_ui_credentials(db_path: &Path) -> Option<(String, String)> {
@@ -318,15 +339,8 @@ async fn dev_master_path(rt: &Runtime) -> Result<PathBuf, String> {
 
 async fn write_dev_master_file(rt: &Runtime, master_hex: &str) -> Result<PathBuf, String> {
     let path = dev_master_path(rt).await?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    fs::write(&path, format!("{master_hex}\n")).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
-    }
+    let body = zeroize::Zeroizing::new(format!("{master_hex}\n"));
+    dmc_vault::secure_fs::write_secret_file(&path, body.as_bytes()).map_err(|e| e.to_string())?;
     Ok(path)
 }
 

@@ -38,6 +38,9 @@ pub enum ProtocolErrorCode {
     RecoveryNotReady = 30,
     BackupNotFound = 31,
     Unsupported = 32,
+    /// D4-D: the opened storage is older than the generation the unlocking client already
+    /// saw (rollback of the data root). Vault stays locked.
+    StorageRollbackDetected = 33,
 }
 
 impl ProtocolErrorCode {
@@ -75,6 +78,7 @@ impl ProtocolErrorCode {
             Self::RecoveryNotReady => "RecoveryNotReady",
             Self::BackupNotFound => "BackupNotFound",
             Self::Unsupported => "Unsupported",
+            Self::StorageRollbackDetected => "StorageRollbackDetected",
         }
     }
 }

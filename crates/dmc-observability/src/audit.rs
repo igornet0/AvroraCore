@@ -33,6 +33,13 @@ pub enum AuditEventKind {
     RecoveryStarted,
     RecoveryCompleted,
     RecoveryFailed,
+    /// A privilege was granted (who: principal, to whom: target, what: privilege).
+    PrivilegeGranted,
+    PrivilegeRevoked,
+    /// D4-A: a plaintext SQL store was migrated to encrypted storage (explicit request).
+    StorageMigrated,
+    /// D4-A: an explicit storage migration was refused or failed (nothing switched).
+    StorageMigrationFailed,
 }
 
 impl AuditEventKind {
@@ -57,6 +64,10 @@ impl AuditEventKind {
             Self::RecoveryStarted => "audit.recovery.started",
             Self::RecoveryCompleted => "audit.recovery.completed",
             Self::RecoveryFailed => "audit.recovery.failed",
+            Self::PrivilegeGranted => "audit.privilege.granted",
+            Self::PrivilegeRevoked => "audit.privilege.revoked",
+            Self::StorageMigrated => "audit.storage.migrated",
+            Self::StorageMigrationFailed => "audit.storage.migration_failed",
         }
     }
 }
@@ -84,6 +95,12 @@ pub struct AuditEvent {
     /// Low-cardinality SQL operation class (SELECT/INSERT/…), never statement text.
     pub operation: Option<String>,
     pub parameter_count: Option<u32>,
+    /// Identity a privilege change applies to (opaque id).
+    #[serde(default)]
+    pub target_id: Option<String>,
+    /// Privilege changed, e.g. `SELECT table:avrora.public.notes` (catalog identifiers only).
+    #[serde(default)]
+    pub privilege: Option<String>,
 }
 
 impl AuditEvent {
@@ -100,6 +117,8 @@ impl AuditEvent {
             error_code: None,
             operation: None,
             parameter_count: None,
+            target_id: None,
+            privilege: None,
         }
     }
 
@@ -116,6 +135,8 @@ impl AuditEvent {
             error_code: None,
             operation: None,
             parameter_count: None,
+            target_id: None,
+            privilege: None,
         }
     }
 
@@ -131,6 +152,16 @@ impl AuditEvent {
 
     pub fn with_operation(mut self, op: impl Into<String>) -> Self {
         self.operation = Some(op.into());
+        self
+    }
+
+    pub fn with_target_id(mut self, id: impl Into<String>) -> Self {
+        self.target_id = Some(id.into());
+        self
+    }
+
+    pub fn with_privilege(mut self, privilege: impl Into<String>) -> Self {
+        self.privilege = Some(privilege.into());
         self
     }
 
@@ -340,6 +371,17 @@ pub fn sanitize_audit_event(mut event: AuditEvent) -> AuditEvent {
     }
     if let Some(v) = event.error_code.as_mut() {
         *v = sanitize_value(v);
+    }
+    if let Some(v) = event.target_id.as_mut() {
+        *v = truncate_id_pub(v);
+    }
+    if let Some(v) = event.privilege.as_mut() {
+        // `<ACTION> <kind>:<identifier>[.<identifier>]*` — catalog identifiers only.
+        let ok = v.len() <= 200
+            && v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | ' ' | '-'));
+        if !ok {
+            *v = "OTHER".into();
+        }
     }
     if let Some(v) = event.operation.as_mut() {
         // Keep closed operation tokens only; scrub anything path-like.

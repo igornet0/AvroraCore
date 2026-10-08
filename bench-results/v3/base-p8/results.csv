@@ -1,0 +1,15 @@
+suite,system,scenario,params,ops,duration_s,ops_per_s,mb_per_s,p50_us,p95_us,p99_us,max_us,errors,cpu_pct,peak_rss_mb,disk_write_mb,disk_read_mb
+stress,avrora_kv_inproc,concurrency_ramp_write,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':1}",2156,15.0,143.73,0.14,6105.38,11098.29,13014.75,17917.67,0,34.55,33.02,50.29,0.14
+stress,avrora_kv_inproc,concurrency_ramp_write,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':2}",1790,15.0,119.33,0.12,15152.58,26080.67,36345.79,58447.46,0,40.58,189.13,42.23,0.15
+stress,avrora_kv_inproc,concurrency_ramp_write,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':4}",1540,15.0,102.67,0.1,35996.21,56040.29,61040.21,66507.21,0,48.92,225.19,36.52,0.02
+stress,avrora_kv_inproc,concurrency_ramp_write,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':8}",1497,15.0,99.8,0.1,79877.08,115938.46,127128.63,133225.63,0,50.18,279.28,34.57,0.05
+stress,avrora_kv_inproc,concurrency_ramp_write,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':16}",1304,15.0,86.93,0.08,143051.5,352944.21,366152.92,377947.5,0,43.78,303.0,31.34,0.11
+stress,avrora_kv_inproc,concurrency_ramp_write,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':32}",791,15.0,52.73,0.05,541050.42,1122550.38,1289168.67,1303650.0,0,39.03,262.98,18.93,0.02
+stress,avrora_kv_inproc,concurrency_ramp_write,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':64}",869,15.0,57.93,0.06,1157908.0,1351968.25,1467618.08,1513025.46,0,42.25,268.13,20.58,0.09
+stress,avrora_kv_inproc,concurrency_ramp_read,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':1}",524288,1.41,371689.66,362.98,1.71,4.13,18.96,10026.88,0,71.63,32.75,0.0,0.0
+stress,avrora_kv_inproc,concurrency_ramp_read,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':2}",524289,1.11,471326.37,460.28,4.04,4.92,5.67,1886.92,0,117.27,27.77,0.0,0.0
+stress,avrora_kv_inproc,concurrency_ramp_read,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':4}",524291,1.22,429692.57,419.62,8.46,11.25,35.92,1985.29,0,119.42,36.02,0.0,0.0
+stress,avrora_kv_inproc,concurrency_ramp_read,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':8}",524295,1.12,468879.03,457.89,16.71,18.25,25.38,633.96,0,122.18,43.14,0.0,0.0
+stress,avrora_kv_inproc,concurrency_ramp_read,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':16}",524303,1.09,482214.33,470.91,32.96,34.92,39.83,807.96,0,123.15,42.8,0.0,0.0
+stress,avrora_kv_inproc,concurrency_ramp_read,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':32}",524319,1.12,467308.11,456.36,66.67,76.54,111.88,947.17,0,122.53,47.17,0.0,0.0
+stress,avrora_kv_inproc,concurrency_ramp_read,"{'size':'1KB','timing':{'measure_s':15.0,'warmup_s':3.0},'workers':64}",524351,1.1,475034.54,463.9,133.54,142.58,166.13,720.08,0,120.24,47.75,0.0,0.0

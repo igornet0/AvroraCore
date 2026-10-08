@@ -62,8 +62,9 @@ use crate::crash_injection::{maybe_crash, maybe_crash_gc_after_deleted, CrashPoi
 use crate::error::{Error, Result};
 use crate::journal_manifest::JournalManifest;
 use crate::journal_manifest_v2::{
-    authoritative_journal_head_from_manifest, discover_segment_partitions,
-    manifest_active_segment_legacy, manifest_active_segments, manifest_v2_from_segment_infos,
+    authoritative_journal_head_from_manifest, build_partition_segment_manifest,
+    build_rotation_manifest, build_trim_manifest, discover_segment_partitions, manifest_active_segment_legacy, manifest_active_segments,
+    manifest_v2_from_segment_infos, segment_manifest_entry,
     publish_stored_manifest, read_stored_manifest, segment_manifest_path,
     validate_stored_manifest, v2_to_stored, JournalManifestV2, StoredJournalManifest,
 };
@@ -108,6 +109,59 @@ pub struct Journal {
     segment_bytes: u64,
     segment_last_sequence: u64,
     topology: JournalTopology,
+    /// Directory entries (segment files / partition dirs) or topology fields in
+    /// `journal.meta` changed since the last durable meta + directory sync.
+    topology_dirty: bool,
+    /// A rotation failed after sealing the active segment: on-disk topology may be ahead of
+    /// the published manifest. Appends are refused until reopen (recovery repairs it).
+    topology_poisoned: bool,
+    /// Highest sequence covered by a completed fsync of every file it was written to.
+    durable_sequence: u64,
+    /// Highest sequence written through the current `writer`.
+    writer_written_sequence: u64,
+    /// Closed segment files (partition switches) holding entries above `durable_sequence`,
+    /// with the highest sequence written to each. Kept open until a sync covers them.
+    unsynced_files: Vec<(u64, File)>,
+    /// An fsync or flush failed: on-disk state of appended entries is unknown. Appends are
+    /// refused until reopen (recovery re-derives the durable prefix).
+    io_poisoned: bool,
+}
+
+static JOURNAL_FSYNCS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Process-wide count of journal commit fsyncs (segment data files + directories), for
+/// benchmarks / metrics (fsync rate, average group-commit batch size).
+pub fn journal_fsync_count() -> u64 {
+    JOURNAL_FSYNCS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn count_fsync() {
+    JOURNAL_FSYNCS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Fsync work for a group commit, performed without holding the journal (see
+/// [`Journal::begin_group_sync`]).
+pub struct GroupSync {
+    files: Vec<File>,
+    target: u64,
+}
+
+impl GroupSync {
+    /// Every entry with `sequence <= target` is durable once [`Self::run`] succeeds.
+    pub fn target(&self) -> u64 {
+        self.target
+    }
+
+    /// Fsync all files holding not-yet-durable entries (blocking; `F_FULLFSYNC` on macOS).
+    pub fn run(&self) -> Result<()> {
+        crate::crash_injection::maybe_delay_group_sync();
+        crate::crash_injection::maybe_fail_fsync()?;
+        for f in &self.files {
+            f.sync_all().map_err(Error::io)?;
+            count_fsync();
+        }
+        Ok(())
+    }
 }
 
 impl Journal {
@@ -149,6 +203,12 @@ impl Journal {
             segment_bytes: 0,
             segment_last_sequence: 0,
             topology: JournalTopology::new(),
+            topology_dirty: false,
+            topology_poisoned: false,
+            durable_sequence: 0,
+            writer_written_sequence: 0,
+            unsynced_files: Vec::new(),
+            io_poisoned: false,
         };
         journal.layout = StorageLayout {
             data_dir: journal
@@ -163,6 +223,15 @@ impl Journal {
         journal.recover()?;
         if journal.partition_count() <= 1 {
             journal.open_writer_for(PartitionId(0))?;
+        }
+        if !journal.journal_manifest_path().is_file() {
+            // Fresh journal (no segments at recovery): publish the manifest right away so the
+            // manifest is the authoritative topology from the first append on. Rotation, GC
+            // and partition-segment creation then always take their manifest-publishing,
+            // crash-consistent paths, and readers never rebuild topology by scanning segments.
+            // Segment file + directory entry are made durable before the manifest names them.
+            journal.sync()?;
+            journal.bootstrap_journal_manifest(1)?;
         }
         Ok(journal)
     }
@@ -202,7 +271,17 @@ impl Journal {
 
     fn close_writer(&mut self) {
         self.save_open_partition_state();
-        self.writer.take();
+        if let Some(w) = self.writer.take() {
+            if self.writer_written_sequence > self.durable_sequence {
+                // Keep the file until a sync covers its entries; a failed flush means appended
+                // bytes may be lost, so nothing more may be acknowledged.
+                match w.into_inner() {
+                    Ok(f) => self.unsynced_files.push((self.writer_written_sequence, f)),
+                    Err(_) => self.io_poisoned = true,
+                }
+            }
+        }
+        self.writer_written_sequence = 0;
         self.open_partition = None;
         self.active_path = PathBuf::new();
     }
@@ -525,13 +604,34 @@ impl Journal {
     /// Delete whole sealed segments with `end_sequence <= through`. Idempotent.
     ///
     /// Removes authoritative sealed segments (retention GC) and obsolete superseded segments
-    /// when allowed by `through`. Does not modify `superseded_segment_ids` in the manifest.
+    /// when allowed by `through`.
+    ///
+    /// With a published manifest, authoritative segments are first removed from it (published
+    /// as superseded) and only then deleted: a crash at any point leaves either the old
+    /// manifest with all files present, or the new manifest whose superseded files may still
+    /// exist (deleted by a later trim). The manifest never references a deleted file.
     pub fn trim_through(&mut self, through: u64) -> Result<TrimResult> {
         let _guard = self.topology.begin_mutation()?;
         let eligible = self.eligible_segments(through)?;
         maybe_crash(CrashPoint::BeforeGc)?;
         let journal_dir = self.config.dir.clone();
         let partition_count = self.partition_count();
+        let trimmed: Vec<u64> = eligible
+            .iter()
+            .filter(|c| c.disposition == SegmentDisposition::Authoritative)
+            .map(|c| c.segment_id)
+            .collect();
+        let manifest_path = self.journal_manifest_path();
+        if !trimmed.is_empty() && manifest_path.is_file() {
+            let current = read_stored_manifest(&manifest_path)?.ok_or_else(|| {
+                Error::JournalManifestInconsistent("empty manifest".into())
+            })?;
+            let next = build_trim_manifest(&current, &trimmed, |id| {
+                crate::layout::find_segment_path(&journal_dir, id).is_some()
+            })?;
+            validate_stored_manifest(&next, &journal_dir, partition_count)?;
+            publish_stored_manifest(&self.journal_runtime_dir(), &next)?;
+        }
         let mut deleted = Vec::new();
         let mut touched_partitions = HashSet::new();
 
@@ -780,7 +880,13 @@ impl Journal {
         if has_manifest {
             let stored = read_stored_manifest(&manifest_path)?
                 .ok_or_else(|| Error::JournalManifestInconsistent("empty manifest".into()))?;
+            self.rollback_interrupted_rotations(&stored)?;
             validate_stored_manifest(&stored, &journal_dir, self.partition_count())?;
+            // The manifest is authoritative for active segments: a partition it lists without
+            // one has none, even if journal.meta still names an unpublished (orphan) segment.
+            for pid in 0..self.partition_count() {
+                self.meta.set_active_segment_for(PartitionId(pid), 0);
+            }
             for (pid, seg_id) in manifest_active_segments(&stored)? {
                 self.meta.set_active_segment_for(pid, seg_id);
             }
@@ -920,6 +1026,7 @@ impl Journal {
 
         report.last_valid_sequence = max_seq;
         self.last_sequence = max_seq;
+        self.durable_sequence = max_seq;
         self.meta.next_sequence = max_seq.saturating_add(1).max(1);
         if self.meta.active_segment == 0 && self.partition_count() <= 1 {
             self.meta.active_segment = auth_ids.iter().max().copied().unwrap_or(1);
@@ -948,6 +1055,7 @@ impl Journal {
         let journal_dir = &self.config.dir;
         ensure_partition_dir(journal_dir, partition_id, self.partition_count())?;
         let mut segment_id = self.meta.active_segment_for(partition_id);
+        let mut first_in_partition = false;
         if segment_id == 0 {
             segment_id = self.meta.allocate_segment_id(
                 list_segment_ids(journal_dir)?
@@ -956,6 +1064,13 @@ impl Journal {
                     .unwrap_or(0),
             );
             self.meta.set_active_segment_for(partition_id, segment_id);
+            first_in_partition = true;
+        }
+        // With a published manifest, a partition's first segment must be in the manifest before
+        // any entry in it is acknowledged; until then (or after any failure) appends are refused.
+        let publish = first_in_partition && self.journal_manifest_path().is_file();
+        if publish {
+            self.topology_poisoned = true;
         }
         let path = segment_path_for_partition(
             journal_dir,
@@ -982,7 +1097,19 @@ impl Journal {
             let mut w = BufWriter::new(file);
             w.write_all(&header).map_err(Error::io)?;
             w.flush().map_err(Error::io)?;
+            if publish {
+                maybe_crash(CrashPoint::AfterPartitionSegmentCreate)?;
+            }
             w.get_ref().sync_all().map_err(Error::io)?;
+            // New directory entry: the next `sync()` must persist meta and fsync the dirs.
+            self.topology_dirty = true;
+            if publish {
+                // Directory entry durable before the manifest references the segment.
+                self.sync()?;
+                maybe_crash(CrashPoint::AfterPartitionSegmentFsync)?;
+                self.publish_partition_segment_manifest(partition_id, segment_id)?;
+                self.topology_poisoned = false;
+            }
             self.segment_bytes = SEGMENT_HEADER_LEN as u64;
             self.entries_in_segment = 0;
             self.segment_last_sequence = 0;
@@ -991,8 +1118,11 @@ impl Journal {
             let len = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             self.segment_bytes = len;
             let bytes = fs::read(&path).map_err(Error::io)?;
-            let (_last_good, _entries, last_seq) = scan_segment(&bytes)?;
+            let (_last_good, entries, last_seq) = scan_segment(&bytes)?;
             self.segment_last_sequence = last_seq;
+            // The footer written at rotation must count every record in the segment,
+            // including those appended before this writer was (re)opened.
+            self.entries_in_segment = entries.len() as u64;
             self.writer = Some(BufWriter::new(file));
         }
         self.active_path = path;
@@ -1005,6 +1135,14 @@ impl Journal {
         draft: JournalEntryDraft,
         path_dek: &KeyMaterial,
     ) -> Result<JournalEntryRef> {
+        if self.topology_poisoned {
+            return Err(Error::JournalManifestInconsistent(
+                "journal rotation incomplete; reopen required".into(),
+            ));
+        }
+        if self.io_poisoned {
+            return Err(Error::format("journal fsync failed; reopen required"));
+        }
         let partition = resolve_partition(
             &draft.path,
             draft.partition_key.as_ref(),
@@ -1024,19 +1162,33 @@ impl Journal {
         }
         self.segment_bytes += bytes.len() as u64;
         self.entries_in_segment += 1;
+        self.writer_written_sequence = sequence;
         self.last_sequence = sequence;
         self.segment_last_sequence = sequence;
         self.meta.next_sequence = sequence + 1;
         Ok(JournalEntryRef { sequence, event_id })
     }
 
+    /// Durable commit of every appended entry.
+    ///
+    /// Appended entries are durable once the active segment is fsynced: recovery derives
+    /// `next_sequence` / `last_fsync_seq` from segment contents and never trusts `journal.meta`
+    /// for them. `journal.meta` and directory fsyncs are therefore only needed when the
+    /// topology changed (new segment file, partition dir, rotation) — see `topology_dirty`.
     pub fn sync(&mut self) -> Result<()> {
-        if let Some(w) = self.writer.as_mut() {
-            w.flush().map_err(Error::io)?;
-            w.get_ref().sync_all().map_err(Error::io)?;
+        if self.io_poisoned {
+            return Err(Error::format("journal fsync failed; reopen required"));
         }
+        if let Err(e) = self.sync_data_files() {
+            self.io_poisoned = true;
+            return Err(e);
+        }
+        self.durable_sequence = self.last_sequence;
         self.save_open_partition_state();
         self.meta.last_fsync_seq = self.last_sequence;
+        if !self.topology_dirty {
+            return Ok(());
+        }
         let meta_path = self.config.dir.join("journal.meta");
         self.meta.save(&meta_path)?;
         if matches!(self.config.fsync_policy, FsyncPolicy::Always) {
@@ -1051,21 +1203,114 @@ impl Journal {
                 }
             }
         }
+        self.topology_dirty = false;
         Ok(())
     }
 
+    fn sync_data_files(&mut self) -> Result<()> {
+        crate::crash_injection::maybe_fail_fsync()?;
+        if let Some(w) = self.writer.as_mut() {
+            w.flush().map_err(Error::io)?;
+            w.get_ref().sync_all().map_err(Error::io)?;
+            count_fsync();
+        }
+        for (_, f) in &self.unsynced_files {
+            f.sync_all().map_err(Error::io)?;
+            count_fsync();
+        }
+        self.unsynced_files.clear();
+        Ok(())
+    }
+
+    /// Highest sequence known durable (every file holding it fsynced).
+    pub fn durable_sequence(&self) -> u64 {
+        self.durable_sequence
+    }
+
+    /// Start a group commit: flush buffered appends and hand out duplicated handles of every
+    /// file holding entries above [`Self::durable_sequence`], so the fsync can run without
+    /// holding the journal. Returns `None` when topology changed (new segment / dir entries)
+    /// — the caller must then use [`Self::sync`], which also persists meta and directories.
+    ///
+    /// Files stay tracked here until [`Self::complete_group_sync`] succeeds, so a concurrent
+    /// [`Self::sync`] still fsyncs them and never reports durability the group sync has not
+    /// achieved yet.
+    pub fn begin_group_sync(&mut self) -> Result<Option<GroupSync>> {
+        if self.io_poisoned {
+            return Err(Error::format("journal fsync failed; reopen required"));
+        }
+        if self.topology_dirty {
+            return Ok(None);
+        }
+        let mut files = Vec::with_capacity(self.unsynced_files.len() + 1);
+        let dup = |f: &File| f.try_clone().map_err(Error::io);
+        let prepared = (|| -> Result<()> {
+            if let Some(w) = self.writer.as_mut() {
+                if self.writer_written_sequence > self.durable_sequence {
+                    w.flush().map_err(Error::io)?;
+                    files.push(dup(w.get_ref())?);
+                }
+            }
+            for (_, f) in &self.unsynced_files {
+                files.push(dup(f)?);
+            }
+            Ok(())
+        })();
+        if let Err(e) = prepared {
+            self.io_poisoned = true;
+            return Err(e);
+        }
+        Ok(Some(GroupSync {
+            files,
+            target: self.last_sequence,
+        }))
+    }
+
+    /// Record the outcome of [`GroupSync::run`]. On failure the journal is poisoned: the
+    /// error is returned and no entry above the previous durable sequence may be acknowledged.
+    pub fn complete_group_sync(&mut self, target: u64, outcome: Result<()>) -> Result<()> {
+        if let Err(e) = outcome {
+            self.io_poisoned = true;
+            return Err(e);
+        }
+        if self.io_poisoned {
+            return Err(Error::format("journal fsync failed; reopen required"));
+        }
+        self.durable_sequence = self.durable_sequence.max(target);
+        let durable = self.durable_sequence;
+        self.unsynced_files.retain(|(written, _)| *written > durable);
+        self.meta.last_fsync_seq = self.meta.last_fsync_seq.max(target);
+        Ok(())
+    }
+
+    /// Seal the open partition's active segment and switch to a new one.
+    ///
+    /// Crash ordering when a manifest is published (it is then the authoritative topology):
+    /// 1. footer + fsync on the old segment;
+    /// 2. create the new segment (header fsync) + persist meta + fsync dirs;
+    /// 3. publish the next manifest generation (old → Sealed, new → Active).
+    ///
+    /// A crash between 1 and 3 leaves the manifest naming a footered segment as active;
+    /// recovery strips that footer (`rollback_interrupted_rotations`) and the unpublished
+    /// segment stays an ignored orphan. No entry is appended to the new segment — and so none
+    /// is acknowledged — before step 3 is durable; on any error the journal refuses appends
+    /// until reopen. Without a manifest (legacy topology) steps 1–2 are unchanged.
     pub fn rotate_segment(&mut self) -> Result<()> {
         let _guard = self.topology.begin_mutation()?;
         let partition_id = PartitionId(
             self.open_partition
                 .ok_or_else(|| Error::format("no open partition for rotate"))?,
         );
+        let sealed_id = self.meta.active_segment_for(partition_id);
+        let has_manifest = self.journal_manifest_path().is_file();
+        self.topology_poisoned = true;
         if let Some(mut w) = self.writer.take() {
             let footer = encode_footer(self.segment_last_sequence, self.entries_in_segment);
             w.write_all(&footer).map_err(Error::io)?;
             w.flush().map_err(Error::io)?;
             w.get_ref().sync_all().map_err(Error::io)?;
         }
+        maybe_crash(CrashPoint::AfterRotationFooter)?;
         self.save_open_partition_state();
         let new_id = self.meta.allocate_segment_id(
             list_segment_ids(&self.config.dir)?
@@ -1074,12 +1319,105 @@ impl Journal {
                 .unwrap_or(0),
         );
         self.meta.set_active_segment_for(partition_id, new_id);
+        self.topology_dirty = true;
         self.entries_in_segment = 0;
         self.segment_bytes = 0;
         self.segment_last_sequence = 0;
         self.open_partition = None;
         self.open_writer_for(partition_id)?;
-        self.sync()
+        self.sync()?;
+        maybe_crash(CrashPoint::AfterRotationNewSegment)?;
+        if has_manifest {
+            self.publish_rotation_manifest(partition_id, sealed_id, new_id)?;
+        }
+        self.topology_poisoned = false;
+        Ok(())
+    }
+
+    fn publish_rotation_manifest(
+        &self,
+        partition_id: PartitionId,
+        sealed_id: u64,
+        new_id: u64,
+    ) -> Result<()> {
+        let current = read_stored_manifest(&self.journal_manifest_path())?.ok_or_else(|| {
+            Error::JournalManifestInconsistent("rotation requires a published manifest".into())
+        })?;
+        let partitions = HashMap::from([(sealed_id, partition_id), (new_id, partition_id)]);
+        let infos = self.segment_infos_from_ids(&[sealed_id, new_id], &partitions)?;
+        let entry = |id: u64| {
+            infos
+                .iter()
+                .find(|i| i.id == id)
+                .map(segment_manifest_entry)
+                .ok_or_else(|| {
+                    Error::JournalManifestInconsistent(format!("rotation: segment {id} unreadable"))
+                })
+        };
+        let next =
+            build_rotation_manifest(&current, partition_id, entry(sealed_id)?, entry(new_id)?)?;
+        validate_stored_manifest(&next, &self.config.dir, self.partition_count())?;
+        publish_stored_manifest(&self.journal_runtime_dir(), &next)
+    }
+
+    fn publish_partition_segment_manifest(
+        &self,
+        partition_id: PartitionId,
+        segment_id: u64,
+    ) -> Result<()> {
+        let current = read_stored_manifest(&self.journal_manifest_path())?.ok_or_else(|| {
+            Error::JournalManifestInconsistent("partition segment requires a manifest".into())
+        })?;
+        let partitions = HashMap::from([(segment_id, partition_id)]);
+        let info = self
+            .segment_infos_from_ids(&[segment_id], &partitions)?
+            .into_iter()
+            .find(|i| i.id == segment_id)
+            .ok_or_else(|| {
+                Error::JournalManifestInconsistent(format!("segment {segment_id} unreadable"))
+            })?;
+        let next = build_partition_segment_manifest(
+            &current,
+            partition_id,
+            segment_manifest_entry(&info),
+        )?;
+        validate_stored_manifest(&next, &self.config.dir, self.partition_count())?;
+        publish_stored_manifest(&self.journal_runtime_dir(), &next)
+    }
+
+    /// Undo a rotation interrupted before its manifest was published: the manifest still
+    /// names the segment as active but its footer is on disk. Only a footer that seals a fully
+    /// valid segment (all records intact, counts match) is removed; anything else stays a
+    /// `JournalManifestInconsistent` error from validation (fail closed).
+    fn rollback_interrupted_rotations(&self, manifest: &StoredJournalManifest) -> Result<()> {
+        let journal_dir = &self.config.dir;
+        for (pid, entry) in manifest.all_segments() {
+            if entry.state != SegmentState::Active {
+                continue;
+            }
+            let path =
+                segment_manifest_path(journal_dir, self.partition_count(), pid, entry.segment_id);
+            let Ok(bytes) = fs::read(&path) else {
+                continue;
+            };
+            if decode_segment_footer(&bytes).is_none() {
+                continue;
+            }
+            let Ok((start, _, _, _)) = validate_sealed_segment(&bytes, entry.segment_id) else {
+                continue;
+            };
+            if start != entry.start_sequence {
+                continue;
+            }
+            let file = OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .map_err(Error::io)?;
+            file.set_len((bytes.len() - SEGMENT_FOOTER_LEN) as u64)
+                .map_err(Error::io)?;
+            file.sync_all().map_err(Error::io)?;
+        }
+        Ok(())
     }
 
     /// Phase 5.7.5/5.7.6: k-way merge over authoritative manifest segments.
@@ -1156,6 +1494,7 @@ impl Journal {
 fn sync_dir(dir: &std::path::Path) -> Result<()> {
     let f = File::open(dir).map_err(Error::io)?;
     f.sync_all().map_err(Error::io)?;
+    count_fsync();
     Ok(())
 }
 
